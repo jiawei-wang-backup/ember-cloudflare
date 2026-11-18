@@ -53,6 +53,19 @@ const cardMessage = (overrides: Partial<Message> = {}) => message({ body: "", pl
 /** A file message, whose text is empty and whose plain text is its file's name, as the room posts it. */
 const fileMessage = (overrides: Partial<Message> = {}) => message({ body: "", plainText: report.name, attachment: report, ...overrides });
 
+it("hides standalone generated event IDs while keeping the disclosure and ordinary message content",()=>{
+  const marker="PULSEBACKGROUND123INTRO";
+  const disclosure="【生成的演示讨论 · 依据监控快照】";
+  const original=message({plainText:`${disclosure}\n真实背景\n${marker}`,body:`<p>${disclosure}</p><p>真实背景</p><p>${marker}</p>`});
+  const {update}=show(original);
+  expect(screen.getByText(disclosure)).toBeVisible();
+  expect(screen.getByText("真实背景")).toBeVisible();
+  expect(screen.queryByText(marker)).not.toBeInTheDocument();
+  expect(original.plainText).toContain(marker);
+  update(message({plainText:marker}));
+  expect(screen.getByText(marker)).toBeVisible();
+});
+
 /**
  * Renders one message, opening and closing its editor as the room does, seen by `me`, who's an
  * administrator if `administrator`, in a thread's panel if `thread` says where, and marked as the open

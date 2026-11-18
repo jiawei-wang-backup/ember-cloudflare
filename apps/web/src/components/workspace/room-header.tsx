@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import type { Favorites, Involvement, Me, Room, User } from "@ember/protocol";
+import type { Favorites, Involvement, Me, Room, User, PulseTeam } from "@ember/protocol";
 import { ChatBubbleEmpty, MoreHoriz, Search } from "@/components/icons/iconoir";
 import { RoomIcon } from "@/components/icons/room-icon";
 import { PageLink } from "@/components/page-link";
@@ -20,6 +20,7 @@ import { UserAvatar } from "./user-avatar";
 const MAX_FACES = 4;
 
 interface Props {
+  team?: PulseTeam;
   room: Room;
   /** Its name as whoever's reading it reads it, which for a DM names the others in it. */
   name: string;
@@ -46,7 +47,7 @@ interface Props {
  * is then your notification level's, and its settings. A DM's has a chat bubble in place of the room's
  * icon, and no star or huddle button, and a DM with an AI agent alone the agent badge after its name.
  */
-export function RoomHeader({ room, name, present, status, offline, favorite, onStarred, involvement, askForRoom, onSessionChanged, onFailed }: Props) {
+export function RoomHeader({ room, name, present, status, offline, favorite, onStarred, involvement, askForRoom, onSessionChanged, onFailed, team }: Props) {
   const nameOf = useNameOf();
   const isWithAgent = useIsWithAgent();
   const openSearch = useContext(OpenSearchContext);
@@ -71,6 +72,7 @@ export function RoomHeader({ room, name, present, status, offline, favorite, onS
         </h1>
         {isWithAgent(room) && <AgentBadge />}
         {!direct && <FavoriteButton roomId={room.id} favorite={favorite} onSaved={onStarred} onSessionChanged={onSessionChanged} />}
+        {team && <span className="flex shrink-0 gap-1 rounded-md bg-hover px-2 py-1 text-[11px] text-message-muted max-md:px-1" title={`频道成员：${team.people} 人，${team.bots} 个 Bot；${team.members.map(m => `${m.name}${m.bot ? "（Bot）" : ""}`).join("、")}`}><span>{team.people} 人</span><span aria-hidden>·</span><span>{team.bots} Bot</span></span>}
         {/* The composer's disabled while it's offline; this says why. */}
         {offline && (
           <span role="status" className="shrink-0 rounded-full border px-2 py-0.5 text-xs text-muted-foreground">

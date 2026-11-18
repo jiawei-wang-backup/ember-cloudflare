@@ -1,11 +1,11 @@
-import { useEffect, useEffectEvent, useImperativeHandle, useRef, type Ref } from "react";
-import type { Favorites, Invitation, Involvement, Me } from "@ember/protocol";
+import { useContext, useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type Ref } from "react";
+import type { Favorites, Invitation, Involvement, Me, Message, PulseSnapshot } from "@ember/protocol";
 import { MainContent } from "@/components/main-content";
-import { useNameOf } from "@/hooks/use-directory";
+import { PeopleContext, useNameOf } from "@/hooks/use-directory";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useMessageEditors } from "@/hooks/use-message-editors";
 import { useRoom } from "@/hooks/use-room";
-import { useVisit } from "@/hooks/use-route";
+import { useVisit, navigate, permalinkOf } from "@/hooks/use-route";
 import { useTitle } from "@/hooks/use-title";
 import type { Room } from "@/lib/api";
 import { roomName } from "@/lib/directs";
@@ -16,7 +16,13 @@ import { Composer, RoomDeleted, type ComposerHandle } from "./composer";
 import { MessageList } from "./message-list";
 import { RoomHeader } from "./room-header";
 import { RoomNotice } from "./room-notice";
+import { ProjectOverview } from "./project-overview";
 import { ThreadPanel } from "./thread-panel";
+import { ProjectChatTools } from "./project-chat-tools";
+import { ProjectAssistantContext, ProjectChatContext, ProjectFeedbackNavigation, type ProjectSelection } from "./project-chat-context";
+import {ProjectBusiness} from "./project-business";
+import {ProjectAssistantChat, type AssistantTurn, type ProjectQuickAnswer} from "./project-assistant-chat";
+import {ProjectFeedbackPanel, type FeedbackDraft} from "./project-feedback-panel";
 
 /** Where a thread covers its room, rather than showing beside it: below 1180px wide. */
 const THREAD_COVERS_ROOM = "(width < 73.75rem)";
@@ -60,6 +66,23 @@ export interface RoomViewHandle {
 }
 
 export function RoomView({ room, messageId, threadId, replyId, invitation, onDismissInvitation, me, favorite, gone, onStarred, involvement, newSince = null, askForRoom, onSessionChanged, onFailed, onGone, ref }: Props) {
+  const [project, setProject] = useState<PulseSnapshot | null>(null);
+  const [selection, setSelection] = useState<ProjectSelection | null>(null);
+  const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft | null>(null);
+  const currentProject = room.kind !== "direct" && project?.project.full_name.split("/").at(-1)?.toLowerCase() === room.name.toLowerCase() ? project : null;
+  const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
+  const [assistantMessage, setAssistantMessage] = useState<Message | null>(null);
+  const people = useContext(PeopleContext);
+  const assistantBot = currentProject?.business ? [...people.values()].find(person => person.role === "bot" && person.name === "项目助手") : undefined;
+  const nextAssistantTurn = useRef(0);
+  useEffect(() => {setProject(null); setFeedbackDraft(null); setAssistantTurns([]); setAssistantMessage(null);}, [room.id]);
+  const visit = useVisit();
+  const requestedView = new URLSearchParams(location.search).get("view");
+  const view = messageId || threadId || requestedView === "discussion" ? "discussion"
+    : requestedView === "feedback" || requestedView === "assistant" ? requestedView : "overview";
+  const roomPath = `/rooms/${room.id}`;
+  const setView = (next: typeof view) => navigate(next === "overview" ? roomPath : `${roomPath}?view=${next}`);
+  const discussion = !currentProject?.business || view === "discussion";
   const { state, frames, postMessage, postFiles, typing, loadOlder, loadNewer, jump, messageActions, dismissNotice } = useRoom(room.id, me, onSessionChanged, messageId);
   const nameOf = useNameOf();
   const name = roomName(room, me.id, nameOf);
@@ -73,13 +96,32 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
     if (foundGone) roomGone();
   }, [foundGone]);
   const deleted = gone || foundGone;
+  async function shareProjectAnswer(answer: ProjectQuickAnswer) {
+    const address = location.pathname + location.search;
+    const permission = await fetch(`/api${roomPath}/project?audience=room`, {signal: AbortSignal.timeout(8000)});
+    if (permission.status === 403) throw new Error("频道成员未全部获得项目授权，暂不能分享。");
+    if (!permission.ok) throw new Error("暂时无法核对分享权限，请重试。");
+    if (address !== location.pathname + location.search || deleted || state.offline) throw new Error("频道已切换或连接中断，请重试。");
+
+    const body = document.createElement("div");
+    const heading = body.appendChild(document.createElement("p"));
+    heading.appendChild(document.createElement("strong")).textContent = `项目助手 · ${answer.question}`;
+    const reply = new DOMParser().parseFromString(answer.html, "text/html");
+    // The same room composer sanitizes shared replies before storing them.
+    body.append(...reply.body.childNodes);
+    if (!Array.from(body.querySelectorAll("a")).some(link => link.getAttribute("href") === roomPath)) {
+      const source = body.appendChild(document.createElement("p")).appendChild(document.createElement("a"));
+      source.setAttribute("href", roomPath);
+      source.textContent = "项目总览";
+    }
+    if (!postMessage(body.innerHTML)) throw new Error("发送失败，请重试。");
+  }
 
   // The room opens at the message its address names. Following its permalink, or one to another message
   // in it, or the room's own link, goes there, or to the newest, even when it's the page shown. One
   // followed while the room is away goes there once the room lets the page in again. Opening a thread,
   // even at a permalink, whose address the thread's takes the place of, going to one of its replies, or
   // closing it leaves the room's messages as they are.
-  const visit = useVisit();
   const visited = useRef({ messageId, visit, threadId });
   const goTo = useEffectEvent((messageId: string | null) => jump(messageId));
   useEffect(() => {
@@ -106,7 +148,11 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
   };
 
   return (
-    <>
+    <ProjectAssistantContext value={currentProject?.business && !deleted ? {bot: assistantBot, askPrivately: message => {
+      setAssistantMessage(message);
+      setView("assistant");
+    }} : null}>
+    <ProjectFeedbackNavigation value={currentProject?.business ? () => setView("feedback") : null}><ProjectChatContext value={selection}>
       {/* The room's header and messages, placed in the page's grid as if they were its own. */}
       <div className="contents" inert={covered}>
         <RoomHeader
@@ -121,10 +167,26 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
           askForRoom={askForRoom}
           onSessionChanged={onSessionChanged}
           onFailed={onFailed}
+          team={currentProject?.team}
         />
         {/* Backgrounds run under a landscape phone's notch; the room's contents stay clear of it. */}
         <MainContent className="relative flex min-h-0 min-w-0 flex-col bg-background pr-[env(safe-area-inset-right)] max-md:pl-[env(safe-area-inset-left)]">
           <RoomNotice notice={state.notice} onDismiss={dismissNotice} />
+          <div className={currentProject?.business ? "flex shrink-0 items-center gap-2 border-b bg-surface px-3 py-2" : "contents"}>
+          {currentProject?.business && <nav aria-label="项目工作区" className="flex min-w-0 flex-wrap items-center gap-1">{([["discussion", "项目讨论"], ["overview", "项目总览"], ["assistant", "项目助手"], ["feedback", "反馈与落实"]] as const).map(([value, label]) => <button key={value} aria-current={view === value ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => {if (view !== value) setView(value);}}>{label}</button>)}</nav>}
+          <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>
+          </div>
+          {currentProject?.business && view === "overview" && <ProjectBusiness key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
+          {currentProject?.business && view === "assistant" && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
+            reference={assistantMessage?.roomId === room.id ? {
+              text: assistantMessage.plainText || "附件",
+              author: nameOf(assistantMessage.creator), link: permalinkOf(assistantMessage),
+            } : null} onClearReference={() => setAssistantMessage(null)}
+            onAnswer={answer => {const id = ++nextAssistantTurn.current; setAssistantTurns(turns => [...turns, {...answer, id}]);}}
+            onShared={id => setAssistantTurns(turns => turns.map(turn => turn.id === id ? {...turn, shared: true} : turn))}
+            onShare={shareProjectAnswer} shareDisabled={deleted || state.offline} onDiscussion={() => setView("discussion")}/>}
+          {currentProject?.business && view === "feedback" && <ProjectFeedbackPanel key={room.id} roomId={room.id} data={currentProject} me={me} draft={feedbackDraft} onDraftHandled={() => setFeedbackDraft(null)} focusId={new URLSearchParams(location.search).get("feedback")}/>}
+          {discussion && <ProjectChatTools key={room.id} roomId={room.id} data={currentProject} me={me} actions={deleted ? null : messageActions} editors={editors} onSelectionChange={setSelection} onAdopted={id => navigate(`${roomPath}?view=feedback&feedback=${encodeURIComponent(id)}`)}>
           <MessageList
             roomName={name}
             direct={direct}
@@ -142,7 +204,8 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
             openThread={threadId}
             newSince={newSince}
           />
-          {deleted ? (
+          </ProjectChatTools>}
+          {discussion && (deleted ? (
             <RoomDeleted />
           ) : (
             <Composer
@@ -162,7 +225,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
               onTyping={typing}
               onEditLastMessage={editLastMessage}
             />
-          )}
+          ))}
         </MainContent>
       </div>
       {threadId !== undefined && (
@@ -181,6 +244,6 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
           onDismissRoomNotice={dismissNotice}
         />
       )}
-    </>
+    </ProjectChatContext></ProjectFeedbackNavigation></ProjectAssistantContext>
   );
 }

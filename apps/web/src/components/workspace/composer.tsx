@@ -245,7 +245,7 @@ interface Props {
 export interface ComposerHandle {
   focus(): void;
   /** Writes `markup` in place of what's written, as Quote does, taking focus. */
-  replace(markup: string): void;
+  replace(markup: string, append?: boolean): void;
   /** Adds files to send with the next message, as dropping them on the room's messages does. */
   addFiles(files: Iterable<File>): void;
 }
@@ -289,7 +289,8 @@ export function Composer({ roomId, roomName, direct = false, userId, typing, dis
 
   useImperativeHandle(ref, () => ({
     focus: () => editor.current?.focus(),
-    replace: (markup) => {
+    replace: (markup, append) => {
+      if (append) markup = (editor.current?.value() ?? readDraft(key) ?? "") + markup;
       if (editor.current) return editor.current.replace(markup);
       // Before the editor shows, as its code loads, the reply is what it opens with.
       replied.current = true;

@@ -3189,11 +3189,11 @@ export class Workspace extends DurableObject<Env> {
    * the first page of the active people there whose names contain `query`, by name. "not found" unless
    * they're in the room, or null without a valid session.
    */
-  async mentionable(credentials: Credentials, roomId: RoomId | null, query: string): Promise<DirectoryEntry[] | "not found" | null> {
+  async mentionable(credentials: Credentials, roomId: RoomId | null, query: string, priority?: string[]): Promise<DirectoryEntry[] | "not found" | null> {
     const user = await this.authenticate(credentials);
     if (!user) return null;
     if (roomId !== null && !(await this.store.isMember(roomId, user.id))) return "not found";
-    return this.store.mentionable(query, roomId);
+    return this.store.mentionable(query, roomId, priority);
   }
 
   /** Everyone in the workspace, for the person `credentials` signs in, or null without a valid session. */
@@ -4482,6 +4482,15 @@ export class Workspace extends DurableObject<Env> {
     const user = await this.authenticate(credentials);
     if (!user) return null;
     return (await this.store.roomSettings(roomId, user.id)) ?? "not found";
+  }
+
+  /** Project answers go into the room: require every potential active reader to be authorized. */
+  async canSharePulse(roomId: RoomId, userId: UserId, granted: string[]): Promise<boolean> {
+    const settings = await this.store.roomSettings(roomId,userId);
+    // Future workspace joiners must not inherit project answers via public chat history.
+    if (!settings || settings.room.kind !== "closed" || !granted.includes(userId)) return false;
+    const readers=settings.people.filter(person=>person.member);
+    return readers.some(person=>person.id === userId) && readers.every(person=>granted.includes(person.id));
   }
 
   /**

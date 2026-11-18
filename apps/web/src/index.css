@@ -1,6 +1,15 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+.project-message-bubble {
+  background: var(--hover);
+  overflow-wrap: anywhere;
+}
+
+.project-message-bubble-own {
+  background: color-mix(in oklch, var(--link) 14%, var(--background));
+}
+
 /* Lucide's icon names (zoom-in, table, italic...) aren't class names, so don't make utilities of them. */
 @source not "./components/icons/lucide";
 

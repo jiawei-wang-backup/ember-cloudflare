@@ -9,6 +9,16 @@ import type { Workspace } from "./workspace";
 export type StorageBackend = "do-sqlite" | "d1";
 
 export interface Env {
+  PULSE_URL?: string;
+  PULSE_TOKEN?: string;
+  PULSE_SOURCE?: "dashboard";
+  /** Explicit operator opt-in for a LAN HTTP source, including its port. Never supplied by a client. */
+  PULSE_HTTP_ORIGIN?: string;
+  /** Room ID -> repository UUID or canonical project key, with explicitly authorized Ember users. */
+  PULSE_ROOMS?: string;
+  PULSE_MENTION_PRIORITY?: string;
+  /** Verified, project-scoped demo snapshots only. Never a second database endpoint. */
+  PULSE_DEMO_SNAPSHOTS?: string;
   ASSETS: Fetcher;
   CHAT_ROOM: DurableObjectNamespace<ChatRoom>;
   WORKSPACE: DurableObjectNamespace<Workspace>;

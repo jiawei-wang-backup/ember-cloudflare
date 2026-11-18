@@ -294,8 +294,8 @@ export async function resetPasswordWithCode(reset: PasswordResetWithCode): Promi
  * while Memberful is members only, until they've connected their Memberful account, where to connect it,
  * which signs them in and opens the page `credentials.returnTo` names.
  */
-export async function signIn(credentials: PasswordSignIn): Promise<Me | MemberfulConnection> {
-  const answer = await request<{ user: Me } | MemberfulConnection>("/api/session", { method: "POST", body: JSON.stringify(credentials) });
+export async function signIn(credentials: PasswordSignIn, demo = false): Promise<Me | MemberfulConnection> {
+  const answer = await request<{ user: Me } | MemberfulConnection>(demo ? "/api/demo-session" : "/api/session", { method: "POST", body: JSON.stringify(credentials) });
   return "memberfulConnection" in answer ? answer : answer.user;
 }
 

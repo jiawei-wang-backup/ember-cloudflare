@@ -37,6 +37,8 @@ interface Options {
   order: RoomId[];
   /** The rooms whose rows can move among themselves, in that order. With only one, none can. */
   movable: RoomId[];
+  /** Rows can only move among rows of the same group, when provided. */
+  groupOf?: (roomId: RoomId) => string | undefined;
   /** How long a row is held before it's dragged, or 0 to drag it at once. */
   holdMs: number;
   /** Whether a press on `target` picks up the row it's in. Anywhere in the row does, unless this says otherwise. */
@@ -67,7 +69,7 @@ const anywhere = () => true;
  * The list's element takes `listRef` and `listProps`, its rows carry `data-room-id`, and the element the
  * list scrolls in takes `scrollerRef`, unless that's the list itself.
  */
-export function useRoomDrag({ order, movable, holdMs, grabs = anywhere, isLocked, onDrag, onMove, onCancel }: Options) {
+export function useRoomDrag({ order, movable, groupOf, holdMs, grabs = anywhere, isLocked, onDrag, onMove, onCancel }: Options) {
   const listRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<RoomId[] | null>(null);
@@ -106,8 +108,10 @@ export function useRoomDrag({ order, movable, holdMs, grabs = anywhere, isLocked
     onCancel();
   }
 
+  const peers = (roomId: RoomId) => groupOf ? movable.filter(id => groupOf(id) === groupOf(roomId)) : movable;
+
   function start(roomId: RoomId, point: Point, kind: Press["kind"]) {
-    if (isLocked() || !movable.includes(roomId) || movable.length < 2) return;
+    if (isLocked() || !movable.includes(roomId) || peers(roomId).length < 2) return;
     cancel();
     press.current = { roomId, x: point.clientX, y: point.clientY, lastY: point.clientY, kind, dragging: false };
     if (holdMs > 0) hold.current = setTimeout(() => latest.current.begin(), holdMs);
@@ -134,7 +138,7 @@ export function useRoomDrag({ order, movable, holdMs, grabs = anywhere, isLocked
     pressed.lastY = point.clientY;
     // The row goes before the first other one that can move whose middle is below the pointer, or after
     // the last of them.
-    const before = movable.find((id) => {
+    const before = peers(pressed.roomId).find((id) => {
       const box = id === pressed.roomId ? undefined : rowOf(id)?.getBoundingClientRect();
       return box !== undefined && point.clientY < box.top + box.height / 2;
     });
@@ -180,7 +184,8 @@ export function useRoomDrag({ order, movable, holdMs, grabs = anywhere, isLocked
     if (!roomId || !movable.includes(roomId) || !event.altKey || (!up && event.key !== "ArrowDown")) return;
     event.preventDefault();
     if (isLocked() || press.current) return;
-    const neighbor = movable[movable.indexOf(roomId) + (up ? -1 : 1)];
+    const group = peers(roomId);
+    const neighbor = group[group.indexOf(roomId) + (up ? -1 : 1)];
     if (!neighbor) return;
     focusAfterMove.current = roomId;
     onMove(up ? movedBefore(order, roomId, neighbor) : movedBefore(order, neighbor, roomId), roomId);

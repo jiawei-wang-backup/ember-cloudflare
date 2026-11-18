@@ -880,7 +880,10 @@ async function mentionable(request: Request, env: Env): Promise<Response> {
   const roomId = present(params.get("room_id"));
   if (roomId !== undefined && !isRoomId(roomId)) return problem(404, ROOM_NOT_FOUND);
   const query = present(params.get("filter")) ?? present(params.get("query")) ?? "";
-  const people = await workspace(env).mentionable(credentials, roomId ?? null, query);
+  const priority = roomId && env.PULSE_MENTION_PRIORITY && pulseBinding(env, roomId)
+    ? env.PULSE_MENTION_PRIORITY.split(",").slice(0, 2)
+    : undefined;
+  const people = await workspace(env).mentionable(credentials, roomId ?? null, query, priority);
   if (!people) return problem(401, "Not signed in");
   if (people === "not found") return problem(404, ROOM_NOT_FOUND);
   const items = (await directoryOf(people, env.SESSION_SECRET)).map((person) => mentionPromptItem(person));
@@ -1099,8 +1102,15 @@ async function connectToRoom(request: Request, env: Env, roomId: RoomId, huddle 
 }
 
 /** What answers an API request, if one of the API's routes takes it. */
-function apiAction(request: Request, env: Env, pathname: string): (() => Response | Promise<Response>) | null {
+function apiAction(request: Request, env: Env, pathname: string, background?: (work: Promise<unknown>) => void): (() => Response | Promise<Response>) | null {
   if (pathname === "/api/bootstrap" && request.method === "GET") return () => bootstrap(request, env);
+  const pulseRoom = pathname.match(/^\/api\/rooms\/([^/]+)\/project$/);
+  if (pulseRoom && request.method === "GET") return () => pulseRoute(request,env,pulseRoom[1]!,background);
+  if (pathname === "/api/pulse/projects" && request.method === "GET") return () => pulseSummaries(request, env, background);
+  const feedback = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/feedback(?:\/([a-zA-Z0-9_-]{1,80}))?$/);
+  if (feedback && ["GET", "POST", "PATCH"].includes(request.method)) return () => projectFeedbackRoute(request, env, feedback[1]!, feedback[2]);
+  const pulseAction = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/(messages|adoptions)$/);
+  if (pulseAction && ((pulseAction[2] === "messages" && request.method === "GET") || (pulseAction[2] === "adoptions" && request.method === "POST"))) return () => pulseCollaboration(request, env, pulseAction[1]!, pulseAction[2] as "messages" | "adoptions");
   if (pathname === "/api/first_run" && request.method === "POST") return () => firstRun(request, env);
   if (pathname === "/api/first_run/check" && request.method === "POST") return () => checkSetup(request, env);
   if (pathname === "/api/session" && request.method === "POST") return () => signIn(request, env);
@@ -1274,7 +1284,7 @@ async function isFromBannedAddress(request: Request, env: Env): Promise<boolean>
 const tooManyRequests = () => new Response(null, { status: 429, headers: { "Content-Type": "text/html" } });
 
 /** What the app's routes answer, before the headers every answer gets. */
-async function route(request: Request, env: Env, pathname: string): Promise<Response> {
+async function route(request: Request, env: Env, pathname: string, background?: (work: Promise<unknown>) => void): Promise<Response> {
   // The deploy check isn't a browser's, any more than /up is.
   if (pathname === "/api/health") return health(request, env);
   // Nor is a custom domain check's probe, which this Worker sends.
@@ -1297,7 +1307,7 @@ async function route(request: Request, env: Env, pathname: string): Promise<Resp
   if (outside) return write && isOutsideRegistration(pathname) && (await isFromBannedAddress(request, env)) ? tooManyRequests() : outside();
   const file = fileAddressOf(pathname);
   if (file) return write ? notFound(request) : serveFile(request, env, file);
-  const action = apiAction(request, env, pathname) ?? botAction(request, env, pathname);
+  const action = apiAction(request, env, pathname, background) ?? botAction(request, env, pathname);
   // First: once a route is found, so an unknown address still answers 404, a banned IP address can't
   // change anything, sign in or join.
   if (write && action && (await isFromBannedAddress(request, env))) return tooManyRequests();
@@ -1352,14 +1362,17 @@ function failure(request: Request, pathname: string, error: unknown): Response {
 export default {
   // Everything but the built app's static files comes here first (`run_worker_first`), page loads
   // included, so each answer gets the headers in headers.ts.
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx?: ExecutionContext): Promise<Response> {
     if (!isHttps(request) && requiresHttps(request, env)) return redirectToHttps(request);
     const { pathname } = urlOf(request);
     // /up skips Campfire's before-actions, being Rails' health check, so it's never checked and carries
     // no version, and Active Storage's files, which Campfire's controllers don't serve, carry none either.
     const isUp = isUpPath(pathname) && (request.method === "GET" || request.method === "HEAD");
     const isFile = fileAddressOf(pathname) !== null;
-    const response = isUp ? up(request) : await route(request, env, pathname).catch((error: unknown) => failure(request, pathname, error));
+    const response = isUp ? up(request) : await route(request, env, pathname, ctx ? work => ctx.waitUntil(work) : undefined).catch((error: unknown) => failure(request, pathname, error));
     return withHeaders(response, request, env, { version: !isUp && !isFile, policy: !isFile });
   },
 } satisfies ExportedHandler<Env>;
+import { pulseBinding, pulseRoute, pulseSummaries } from "./pulse";
+import { pulseCollaboration } from "./pulse-collaboration";
+import { projectFeedbackRoute } from "./project-feedback";

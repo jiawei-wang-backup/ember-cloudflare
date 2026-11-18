@@ -55,6 +55,7 @@ export function SignInPage({ workspace, onSignedIn }: { workspace: SignedOutWork
   // Someone whose Memberful email address is someone's here is asked for that someone's password.
   const [withPassword, setWithPassword] = useState(!membersOnly || arrival === "taken");
   const [emailAddress, setEmailAddress] = useState(() => new URLSearchParams(location.search).get("email_address") ?? "");
+  const demo = workspace.account.name === "Project Pulse · 研发协作中心";
   const [busy, setBusy] = useState(false);
   const [shaking, setShaking] = useState(false);
   const [problem, setProblem] = useState<string | null>(() => (arrival ? MEMBERFUL_SIGN_IN_PROBLEMS[arrival] : joiningProblemOnArrival()));
@@ -76,7 +77,7 @@ export function SignInPage({ workspace, onSignedIn }: { workspace: SignedOutWork
     setRefusal(null);
     try {
       // Connecting Memberful comes back to the page this tab was sent here from, signed in.
-      const answer = await signIn({ emailAddress, password: passwordInput.current?.value ?? "", returnTo: returnPath() ?? undefined });
+      const answer = await signIn({ emailAddress, password: passwordInput.current?.value ?? "", returnTo: returnPath() ?? undefined }, demo);
       if (!("memberfulConnection" in answer)) return onSignedIn(answer);
       setBusy(false);
       setConnection(answer.memberfulConnection);
@@ -85,6 +86,10 @@ export function SignInPage({ workspace, onSignedIn }: { workspace: SignedOutWork
       if (!(error instanceof ApiError)) return setProblem("Couldn't reach Ember. Check your connection and try again.");
       if (passwordInput.current) passwordInput.current.value = "";
       // A member whose password is right, and who has connected Memberful, hears that they sign in with it.
+      if (demo) {
+        setRefusal(error.message);
+        return;
+      }
       setRefusal(error.status === 403 ? error.message : error.status === 429 ? SIGN_IN_LIMITED : SIGN_IN_REJECTED);
       setShaking(true);
       passwordInput.current?.focus();
@@ -122,20 +127,20 @@ export function SignInPage({ workspace, onSignedIn }: { workspace: SignedOutWork
                     {refusal}
                   </p>
                 )}
-                <Field id="email_address" label="Email address" translation="email_address">
+                <Field id="email_address" label={demo ? "演示账号" : "Email address"} translation="email_address">
                   <Input
                     id="email_address"
-                    type="email"
+                    type={demo ? "text" : "email"}
                     required
                     autoFocus
                     autoComplete="username"
-                    placeholder="Enter your email address"
+                    placeholder={demo ? "输入演示账号" : "Enter your email address"}
                     value={emailAddress}
                     onChange={(event) => setEmailAddress(event.target.value)}
                     className={FIELD_INPUT}
                   />
                 </Field>
-                <Field id="password" label="Password" translation="password">
+                {!demo && <Field id="password" label="Password" translation="password">
                   {/* Uncontrolled, so what's typed never reaches its `value` attribute, where custom CSS could read it. */}
                   <Input
                     ref={passwordInput}
@@ -147,8 +152,8 @@ export function SignInPage({ workspace, onSignedIn }: { workspace: SignedOutWork
                     maxLength={MAX_PASSWORD_LENGTH}
                     className={FIELD_INPUT}
                   />
-                </Field>
-                <SubmitButton disabled={busy}>Sign in</SubmitButton>
+                </Field>}
+                <SubmitButton disabled={busy}>{demo ? "登录" : "Sign in"}</SubmitButton>
               </form>
             ) : (
               <Button asChild className={PRIMARY_BUTTON}>

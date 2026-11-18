@@ -76,6 +76,18 @@ const listed = () => rows().map((row) => row.textContent);
 const row = (name: string) => rows().find((link) => link.textContent === `#${name}`)!;
 
 afterEach(() => vi.restoreAllMocks());
+it("groups only the Chinese Pulse workspace while preserving room links and private visibility",()=>{
+  const demoRooms=[{...rooms[0]!,id:"delivery",name:"交付与验收 · Pulse"},{...rooms[0]!,id:"project",name:"project-pulse"},{...rooms[1]!,id:"team",name:"研发日常"}];
+  const {rerender}=renderSidebar({workspaceName:"Project Pulse · 研发协作中心",rooms:demoRooms,currentRoomId:"project"});
+  expect(screen.getByRole("heading",{name:/项目频道/})).toBeVisible();
+  expect(screen.getByRole("heading",{name:/团队协作/})).toBeVisible();
+  expect(screen.getByRole("heading",{name:/交付汇总/})).toBeVisible();
+  expect(rows().map(row=>row.getAttribute("href"))).toEqual(["/rooms/project","/rooms/team","/rooms/delivery"]);
+  expect(screen.getByRole("link",{current:"page"})).toHaveAttribute("href","/rooms/project");
+  rerender({workspaceName:"Fernwood"});
+  expect(screen.queryByRole("heading",{name:/项目频道/})).not.toBeInTheDocument();
+  expect(rows().map(row=>row.getAttribute("href"))).toEqual(["/rooms/delivery","/rooms/project","/rooms/team"]);
+});
 
 describe("Workspace tagline", () => {
   it("heads the list with the workspace's tagline in small type under its name, and nothing while it has none", () => {

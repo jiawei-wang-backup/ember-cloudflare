@@ -18,6 +18,7 @@ import {
 import { writtenBody } from "@ember/richtext/dom";
 import type { MessageActions } from "@/components/workspace/message-item";
 import { ApiError, fetchMe, roomSocketUrl } from "@/lib/api";
+import { clientId } from "@/lib/client-id";
 import { handOver, leftUnsent, takeBack } from "@/lib/outbox";
 import { openAhead, reconnectingSocket, waitingAhead, type ReconnectingSocket } from "@/lib/reconnecting-socket";
 import { initialRoomState, isPending, isQueued, roomReducer, unconfirmed, type PendingMessage } from "@/lib/room-state";
@@ -77,7 +78,7 @@ export function messageActionsOf({ send, listen }: RoomFrames, warn: (message: s
     boost: (messageId, content) => sendOrWarn({ type: "boost.create", messageId, content }),
     unboost: (boostId) => sendOrWarn({ type: "boost.delete", boostId }),
     click: (messageId, { id: actionId, blockId, value }) => {
-      const clickId = crypto.randomUUID();
+      const clickId = clientId();
       const button = { actionId, ...(blockId !== undefined && { blockId }), ...(value !== undefined && { value }) };
       if (!sendOrWarn({ type: "card.click", clickId, messageId, ...button })) return Promise.resolve(false);
       return new Promise((resolve) => {
@@ -307,7 +308,7 @@ export function useRoom(roomId: string, me: User, onSessionChanged: (me: Me | nu
         warn(MESSAGE_TOO_LONG);
         return false;
       }
-      const message = pendingMessage(crypto.randomUUID(), roomId, me, body, text, mentions, new Date().toISOString());
+      const message = pendingMessage(clientId(), roomId, me, body, text, mentions, new Date().toISOString());
       toNewest();
       // Until the room has let a connection in, it waits, behind any already waiting, and shows as not
       // sent once the page is offline.
@@ -327,7 +328,7 @@ export function useRoom(roomId: string, me: User, onSessionChanged: (me: Me | nu
       const room = socket.current;
       for (const file of files) {
         if (socket.current !== room) return;
-        const clientMessageId = crypto.randomUUID();
+        const clientMessageId = clientId();
         const now = new Date().toISOString();
         const upload = { name: file.name, size: file.size, percent: 0 };
         toNewest();

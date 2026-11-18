@@ -69,7 +69,7 @@ const asBlob = ({ bytes, type }: SeedFile) => new Blob([bytes as Uint8Array<Arra
  * `user` part is that JSON and whose `avatar` and `variant` parts are the picture, which is small
  * enough to be its own variant, as the browser makes one.
  */
-function userForm(fields: object, picture?: SeedFile): RequestInit {
+export function userForm(fields: object, picture?: SeedFile): Omit<RequestInit, "headers"> & { headers?: Record<string, string> } {
   if (!picture) return { body: JSON.stringify(fields), headers: { "Content-Type": "application/json" } };
   const form = new FormData();
   form.set("user", JSON.stringify(fields));
@@ -121,7 +121,7 @@ export class Ember {
   async setUp(person: PersonForm, avatar?: SeedFile): Promise<Session> {
     const { headers, ...form } = userForm(person, avatar);
     // Percent-encoded, as the page sends it, since a header can't hold every character a password can.
-    const authorization = this.#setupSecret ? { Authorization: `Bearer ${encodeURIComponent(this.#setupSecret)}` } : {};
+    const authorization: Record<string, string> = this.#setupSecret ? { Authorization: `Bearer ${encodeURIComponent(this.#setupSecret)}` } : {};
     return sessionOf(await this.request("/api/first_run", { method: "POST", ...form, headers: { ...headers, ...authorization }, expected: [201] }));
   }
 
@@ -196,9 +196,9 @@ export class Ember {
     const upload = { name: file.name, type: file.type, size: file.bytes.length, clientMessageId };
     const { id, partSize, parts } = (await (await this.json(uploadsPath(roomId), "POST", upload, { session, expected: [201] })).json()) as Upload;
     const part = (n: number) => file.bytes.subarray((n - 1) * partSize, n === parts ? file.bytes.length : n * partSize);
-    for (let n = 1; n < parts; n++) await this.request(uploadPartPath(roomId, id, n), { method: "PUT", body: part(n), session, expected: [204] });
-    if (preview) await this.request(uploadPreviewPath(roomId, id), { method: "PUT", body: preview.bytes, session, expected: [204] });
-    const posted = await this.request(uploadPartPath(roomId, id, parts), { method: "PUT", body: part(parts), session, expected: [200, 201] });
+    for (let n = 1; n < parts; n++) await this.request(uploadPartPath(roomId, id, n), { method: "PUT", body: part(n) as Uint8Array<ArrayBuffer>, session, expected: [204] });
+    if (preview) await this.request(uploadPreviewPath(roomId, id), { method: "PUT", body: preview.bytes as Uint8Array<ArrayBuffer>, session, expected: [204] });
+    const posted = await this.request(uploadPartPath(roomId, id, parts), { method: "PUT", body: part(parts) as Uint8Array<ArrayBuffer>, session, expected: [200, 201] });
     return (await posted.json()) as Message;
   }
 }

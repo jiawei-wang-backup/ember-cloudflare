@@ -6,6 +6,8 @@ import { dateTimeLabel } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { MessageBody, MessageLink, RemoteImage } from "./message-body";
 import { Marked } from "./search-marks";
+import { PulseDeliveryCard } from "./pulse-delivery-card";
+const isPulseDelivery = (card: Card) => card.parts.some(part => part.kind === "context" && part.items.some(item => "html" in item && /事件编号：PULSE\S+/.test(item.html)));
 
 // A bot's cards (packages/protocol/src/cards.ts), which a Slack-compatible webhook's legacy attachments and
 // Block Kit blocks show under its message, framed as a link preview is (message-body.tsx) and laid out as Slack
@@ -43,7 +45,7 @@ export function BotCards({ cards, className, onAction }: { cards: Card[]; classN
     <OnAction value={onAction}>
       <div className={cn("flex flex-col gap-2 pt-1", className)}>
         {cards.map((card, index) => (
-          <BotCard key={index} card={card} />
+          isPulseDelivery(card) ? <PulseDeliveryCard key={index} card={card}/> : <BotCard key={index} card={card} />
         ))}
       </div>
     </OnAction>

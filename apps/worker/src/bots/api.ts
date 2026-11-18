@@ -180,7 +180,10 @@ async function postSlackMessage(request: Request, env: Env, roomId: RoomId, key:
   if (arrived instanceof Response) return arrived;
   const message = slackMessage(payload, arrived.takesClicks);
   if (typeof message === "string") return slackAnswer(400, message);
-  const created = await env.CHAT_ROOM.getByName(roomId).createBotMessage(roomId, arrived, message.markup, message.cards);
+  const deliveryId = request.headers.get("X-Ember-Delivery-Id");
+  if (deliveryId !== null && !/^[0-9a-f]{64}$/.test(deliveryId)) return slackAnswer(400, "invalid_delivery_id");
+  const created = await env.CHAT_ROOM.getByName(roomId).createBotMessage(roomId, arrived, message.markup, message.cards, undefined, deliveryId ?? undefined);
+  if (deliveryId && created === "already_posted") return slackAnswer(200, "ok");
   if (!created) return slackAnswer(404, "channel_not_found");
   if (typeof created === "string") return slackAnswer(400, slackReason(created));
   return slackAnswer(200, "ok");

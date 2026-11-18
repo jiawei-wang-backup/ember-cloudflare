@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { HISTORY_PAGE_SIZE, MAX_CHECKED_MESSAGES, MESSAGE_TOO_LONG, type Message, type User } from "@ember/protocol";
 import { writtenBody } from "@ember/richtext/dom";
+import { clientId } from "@/lib/client-id";
 import { handOver, leftUnsent, takeBack } from "@/lib/outbox";
 import { isQueued, unconfirmed, type ConnectionStatus, type PendingMessage } from "@/lib/room-state";
 import { initialThreadState, threadReducer } from "@/lib/thread-state";
@@ -97,7 +98,7 @@ export function useThread(roomId: string, frames: RoomFrames, status: Connection
         warn(MESSAGE_TOO_LONG);
         return false;
       }
-      const reply = pendingReply(crypto.randomUUID(), body, text, mentions, alsoSend);
+      const reply = pendingReply(clientId(), body, text, mentions, alsoSend);
       if (!send({ type: "message.create", clientMessageId: reply.clientMessageId, body, parentId, alsoSend })) reply.queued = true;
       dispatch({ type: "pending", message: reply });
       return true;
@@ -111,7 +112,7 @@ export function useThread(roomId: string, frames: RoomFrames, status: Connection
     async (files: File[], alsoSend: boolean) => {
       for (const file of files) {
         if (closed.current) return;
-        const clientMessageId = crypto.randomUUID();
+        const clientMessageId = clientId();
         const upload = { name: file.name, size: file.size, percent: 0 };
         dispatch({ type: "pending", message: { ...pendingReply(clientMessageId, "", file.name, [], alsoSend), upload } });
         try {

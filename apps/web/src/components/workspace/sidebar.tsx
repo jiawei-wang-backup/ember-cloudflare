@@ -1,9 +1,10 @@
-import { useContext, useId, useMemo, useState, type MouseEvent } from "react";
-import type { Favorites, LiveHuddle, Me, RoomId, SidebarRoom, User, UserId } from "@ember/protocol";
+import { Fragment, useContext, useEffect, useId, useMemo, useState, type MouseEvent } from "react";
+import type { Favorites, LiveHuddle, Me, RoomId, SidebarRoom, User, UserId, PulseProjectSummary } from "@ember/protocol";
 import { ChatPlusIn, Headset, StarSolid } from "@/components/icons/iconoir";
 import { RoomIcon } from "@/components/icons/room-icon";
 import { useAccount } from "@/hooks/use-account";
 import { PeopleContext, useNameOf } from "@/hooks/use-directory";
+import { useRoomDrag, type OrderStatus } from "@/hooks/use-room-drag";
 import { useMounted } from "@/hooks/use-mounted";
 import { leave, NEW_DIRECT_PATH, roomPath } from "@/hooks/use-route";
 import { useStarOrder } from "@/hooks/use-star-order";
@@ -24,6 +25,16 @@ const MAX_FACES = 4;
 
 /** How many of the people in a huddle its room's row shows the faces of. */
 const MAX_HUDDLE_FACES = 2;
+const PULSE_PROJECTS = new Map([
+  ["project-pulse", "研发进度看板"],
+  ["jxaccount", "飞书统一登录"],
+  ["mfa-approval", "登录验证码审批"],
+  ["wzwx-score", "赛事报名与成绩管理"],
+  ["deltaforce-game-library", "三角洲行动资料库"],
+  ["xiaoxing-voice-changer", "小猩直播变声器"],
+]);
+const PULSE_GROUPS = ["项目频道", "团队协作", "交付汇总"] as const;
+const pulseGroup = (name: string) => PULSE_PROJECTS.has(name) ? PULSE_GROUPS[0] : name === "交付与验收 · Pulse" ? PULSE_GROUPS[2] : PULSE_GROUPS[1];
 
 interface Props {
   /** The workspace's name, which heads the list. */
@@ -92,9 +103,61 @@ export function Sidebar({
     const room = rooms.find((r) => r.id === roomId);
     return room && room.kind !== "direct" ? room.name : "";
   };
-  const { order, moving, status, listRef, scrollerRef, listProps } = useStarOrder({ favorites, shown, nameOf, onSaved: onStarred, onSessionChanged });
-  const listed = useMemo(() => inSidebarOrder(shared, order, sharedOrder), [shared, order, sharedOrder]);
-  const starred = useMemo(() => new Set(order), [order]);
+  const stars = useStarOrder({ favorites, shown, nameOf, onSaved: onStarred, onSessionChanged });
+  const listed = useMemo(() => inSidebarOrder(shared, stars.order, sharedOrder), [shared, stars.order, sharedOrder]);
+  const grouped = workspaceName === "Project Pulse · 研发协作中心";
+  const storageKey = `ember-pulse-channel-order-${meId}`;
+  const [saved, setSaved] = useState<{key: string; ids: RoomId[]}>();
+  const [groupStatus, setGroupStatus] = useState<OrderStatus | null>(null);
+  useEffect(() => {
+    if (!grouped) return;
+    try {
+      const ids: unknown = JSON.parse(localStorage.getItem(storageKey) || "[]");
+      if (Array.isArray(ids)) setSaved({key: storageKey, ids: ids.filter(id => typeof id === "string")});
+    } catch {
+      // This browser may not provide local storage.
+    }
+  }, [grouped, storageKey]);
+  const savedIds = saved?.key === storageKey ? saved.ids : [];
+  const ranked = grouped ? inSidebarOrder(listed, savedIds) : listed;
+  const roomGroups = new Map(ranked.map(room => [room.id, pulseGroup(room.name)]));
+  const groupedIds = grouped ? PULSE_GROUPS.flatMap(group => ranked.filter(room => roomGroups.get(room.id) === group).map(room => room.id)) : [];
+  const groupedDrag = useRoomDrag({
+    order: groupedIds,
+    movable: grouped && !unreadOnly ? groupedIds : [],
+    groupOf: id => roomGroups.get(id),
+    holdMs: 400,
+    isLocked: () => false,
+    onDrag: id => setGroupStatus({message: `正在移动 ${nameOf(id)}，松开即可保存。`, error: false}),
+    onCancel: () => setGroupStatus({message: "已取消移动。", error: false}),
+    onMove: ids => {
+      const next = [...ids, ...savedIds.filter(id => !ids.includes(id))];
+      setSaved({key: storageKey, ids: next});
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+        setGroupStatus({message: "频道顺序已保存。", error: false});
+      } catch {
+        setGroupStatus({message: "当前浏览器无法保存频道顺序。", error: true});
+      }
+    },
+  });
+  const {listRef, scrollerRef, listProps, moving} = grouped ? groupedDrag : stars;
+  const status = grouped ? groupStatus : stars.status;
+  const [projects, setProjects] = useState<PulseProjectSummary[]>([]);
+  useEffect(() => {
+    if (!grouped) return;
+    const controller = new AbortController();
+    const load = () => fetch("/api/pulse/projects", {signal: controller.signal, credentials: "same-origin"}).then(async response => {if (response.ok) setProjects((await response.json()).projects);}).catch(() => {});
+    void load();
+    const timer = setInterval(() => {if (!document.hidden) void load();}, 60_000);
+    return () => {controller.abort(); clearInterval(timer);};
+  }, [grouped, meId]);
+  const draggedOrder = grouped ? inSidebarOrder(ranked, groupedDrag.order) : listed;
+  const displayed = grouped
+    ? PULSE_GROUPS.flatMap(group => draggedOrder.filter(room => roomGroups.get(room.id) === group))
+    : listed;
+  const starred = useMemo(() => new Set(stars.order), [stars.order]);
+  const groupSizes = new Map(PULSE_GROUPS.map(group => [group, displayed.filter(room => roomGroups.get(room.id) === group).length]));
   const directsListed = useMemo(() => inDirectOrder(directs), [directs]);
   // Activity hides the suggestions.
   const suggested = useMemo(() => (unreadOnly ? [] : suggestedPeople(suggestions, rooms)), [unreadOnly, suggestions, rooms]);
@@ -136,21 +199,25 @@ export function Sidebar({
 
       <section aria-label="Rooms" className="flex flex-col">
         <p id={helpId} className="sr-only">
-          Hold a starred room to drag it, or press Alt and the up or down arrow to reorder your favorites. Other rooms follow the workspace order.
+          {grouped ? "按住频道可在同一分组内拖动，也可以按 Alt 加上下方向键调整顺序。" : "Hold a starred room to drag it, or press Alt and the up or down arrow to reorder your favorites. Other rooms follow the workspace order."}
         </p>
         <span id={unreadId} hidden>
           Unread
         </span>
         <div ref={listRef} {...listProps} className={cn("flex flex-col gap-[3px]", moving && "select-none")}>
-          {listed.map((room) => {
+          {displayed.map((room,index) => {
             const unread = markedUnread(room, currentRoomId);
             const star = starred.has(room.id);
+            const projectName = grouped ? PULSE_PROJECTS.get(room.name) : undefined;
+            const label = projectName ? `${projectName}（${room.name}）` : room.name;
+            const movable = grouped ? !unreadOnly && (groupSizes.get(pulseGroup(room.name)) ?? 0) > 1 : star;
             const huddle = huddles[room.id];
             // The words for who's in the room's huddle, which come with its mark.
             const inHuddleId = `${huddleId}-${room.id}`;
             return (
+              <Fragment key={room.id}>
+              {grouped && (index===0 || pulseGroup(displayed[index-1]!.name)!==pulseGroup(room.name)) && <h3 className={cn("flex items-center justify-between px-[9px] pt-3 pb-1 text-[11px] font-medium text-muted-foreground", index===0&&"pt-0")}><span>{pulseGroup(room.name)}</span><span className="text-[10px] tabular-nums">{groupSizes.get(pulseGroup(room.name))}</span></h3>}
               <a
-                key={room.id}
                 data-room-id={room.id}
                 href={roomPath(room.id)}
                 draggable={false}
@@ -158,24 +225,30 @@ export function Sidebar({
                 // Every row says how the stars are reordered, a marked one says it's unread, which the eye sees
                 // by its weight and dot, and one with a huddle says who's in it, which the eye sees by its mark.
                 aria-describedby={[huddle && inHuddleId, unread && unreadId, helpId].filter(Boolean).join(" ")}
-                aria-keyshortcuts={star ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
+                aria-keyshortcuts={movable ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
                 onClick={(event) => select(event, room.id)}
                 className={cn(
                   ROW,
                   "[-webkit-touch-callout:none]",
                   unread && "font-[650]",
-                  star && "cursor-grab",
+                  movable && "cursor-grab",
                   room.id === moving && "relative z-[1] cursor-grabbing bg-background! shadow-[0_4px_14px_var(--color-drag-shadow)] outline outline-muted-foreground",
                 )}
               >
                 <RoomIcon icon={room.icon} size={19} className="w-[18px] shrink-0 text-center text-[22px] leading-none text-muted-foreground" />
-                <span className="truncate">{room.name}</span>
+                <span className="min-w-0 flex-1"><span className="block truncate" title={projectName ? label : undefined}>{label}</span>{grouped && (() => {
+                  const project = projects.find(p => p.roomId === room.id), progress = project?.progress;
+                  if (!progress || !progress.total) return null;
+                  const percent = Math.round((progress.completed ?? progress.accepted) / progress.total * 100);
+                  return <span className="mt-0.5 flex items-center gap-2" title={`${progress.completed ?? progress.accepted}/${progress.total} 阶段记录完成，非业务验收${project.freshness?.status === "snapshot" ? `；快照 ${project.freshness.captured_at}` : ""}`}><span role="progressbar" aria-label={`${room.name} 阶段记录进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="h-1 flex-1 overflow-hidden rounded-full bg-border"><span className="block h-full rounded-full bg-positive/70" style={{width: `${percent}%`}}/></span><span className="text-[10px] leading-3 text-muted-foreground tabular-nums">{percent}%</span></span>;
+                })()}</span>
                 {/* The huddle's mark, the dot and the star sit together at the row's end, pushed there by one auto
                     margin. The star's muted at 65%. */}
                 {huddle && <HuddleMark huddle={huddle} meId={meId} wordsId={inHuddleId} className="ml-auto" />}
                 {unread && <span aria-hidden="true" className={cn("size-[7px] shrink-0 rounded-full bg-foreground", !huddle && "ml-auto")} />}
                 {star && <StarSolid aria-label="Favorite" className={cn("size-3.5 shrink-0 text-muted-foreground/65", !huddle && !unread && "ml-auto")} />}
               </a>
+              </Fragment>
             );
           })}
         </div>

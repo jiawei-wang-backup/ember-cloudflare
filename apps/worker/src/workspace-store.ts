@@ -2334,6 +2334,11 @@ const MENTIONABLE_MEMBERS = `SELECT ${DIRECTORY_COLUMNS}
   WHERE memberships.room_id = ?2 AND users.status = ${ACTIVE} AND users.name LIKE '%' || ?1 || '%'
   ORDER BY lower(users.name), users.id LIMIT ${MENTIONABLE_PAGE}`;
 
+const PRIORITIZED_MENTIONABLE_MEMBERS = MENTIONABLE_MEMBERS.replace(
+  "ORDER BY lower(users.name)",
+  "ORDER BY CASE users.id WHEN ?3 THEN 0 WHEN ?4 THEN 1 ELSE 2 END, lower(users.name)",
+);
+
 /** Whether someone in a room can change it: administrators and the room's creator can. */
 const CAN_ADMINISTER = `(users.role = ${ADMINISTRATOR} OR rooms.creator_id = users.id) AS can_administer`;
 
@@ -3778,8 +3783,12 @@ export class WorkspaceStore {
    * The first page of the active people whose names contain `query`, by name: room `roomId`'s members,
    * or anyone's when it's null.
    */
-  async mentionable(query: string, roomId: RoomId | null): Promise<DirectoryEntry[]> {
-    const rows = roomId === null ? await this.db.all<DirectoryRow>(MENTIONABLE_PEOPLE, query) : await this.db.all<DirectoryRow>(MENTIONABLE_MEMBERS, query, roomId);
+  async mentionable(query: string, roomId: RoomId | null, priority?: string[]): Promise<DirectoryEntry[]> {
+    const rows = roomId === null
+      ? await this.db.all<DirectoryRow>(MENTIONABLE_PEOPLE, query)
+      : priority?.length
+        ? await this.db.all<DirectoryRow>(PRIORITIZED_MENTIONABLE_MEMBERS, query, roomId, priority[0] ?? null, priority[1] ?? null)
+        : await this.db.all<DirectoryRow>(MENTIONABLE_MEMBERS, query, roomId);
     return rows.map(directoryEntry);
   }
 

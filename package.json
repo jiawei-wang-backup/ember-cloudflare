@@ -18,7 +18,18 @@
     "deploy": "node apps/worker/scripts/deploy.ts",
     "vapid:keys": "node apps/worker/scripts/vapid-keys.ts",
     "perf": "pnpm --filter @ember/perf start",
-    "seed": "node apps/worker/scripts/seed.ts"
+    "seed": "node apps/worker/scripts/seed.ts",
+    "dev:demo-cn": "node apps/worker/scripts/demo-cn/dev.ts",
+    "dev:lan": "node apps/worker/scripts/demo-cn/dev.ts --lan",
+    "seed:demo-cn": "node apps/worker/scripts/demo-cn/seed.ts",
+    "verify:demo-cn": "node apps/worker/scripts/demo-cn/verify.ts",
+    "cards:demo-cn": "node apps/worker/scripts/demo-cn/add-project-cards.ts",
+    "enrich:demo-cn": "node apps/worker/scripts/demo-cn/enrich.ts",
+    "directs:demo-cn": "node apps/worker/scripts/demo-cn/directs.ts",
+    "link:pulse": "node apps/worker/scripts/demo-cn/link-pulse.ts",
+    "sync:demo-pulse": "node apps/worker/scripts/demo-cn/sync-monitor.ts",
+    "rollback:demo-pulse": "node apps/worker/scripts/demo-cn/rollback-monitor.ts",
+    "typecheck:demo-cn": "pnpm --filter @ember/web exec tsc -p ../../apps/worker/scripts/demo-cn/tsconfig.json"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

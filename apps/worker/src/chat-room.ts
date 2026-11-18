@@ -22,9 +22,13 @@ import {
   type TimelinePage,
   type User,
   type UserId,
+  type PulseMessagePage,
+  type NewFeedback,
+  type ChangeFeedback,
+  feedbackStatuses,
 } from "@ember/protocol";
 import { parseHuddleSocketParams } from "@ember/protocol/huddles";
-import { prepareBody, userIdFromSgid, userIdsIn, type PreparedBody } from "@ember/richtext";
+import { prepareBody, bodyFromPlainText, userIdFromSgid, userIdsIn, type PreparedBody } from "@ember/richtext";
 import {
   AGENT_NOTES,
   AnswerError,
@@ -69,6 +73,7 @@ import { postClick, postWebhook, WebhookError, webhookPayload, type ClickAnswer,
 import { keptCards } from "./cards";
 import { Courier, ENTRIES_PER_CALL } from "./courier";
 import { openDb, type Db } from "./db";
+import { ProjectFeedbackStore, FeedbackError } from "./project-feedback-store";
 import type { Env } from "./env";
 import { attachedFile, Blobs, objectKey, previewKey, type Identified, type RoomBlob, type UploadedPart } from "./files/blobs";
 import type { ImageSize } from "./files/images";
@@ -576,6 +581,63 @@ export class ChatRoom extends DurableObject<Env> {
     return this.serially(() => this.storeFor(roomId).withIds(ids));
   }
 
+  /** One bounded scan of native room history; callers have already checked membership. */
+  async projectMessages(roomId: RoomId, filter: {authors?: string[]; since?: string; until?: string; before?: string; adopted?: boolean}): Promise<PulseMessagePage> {
+    return this.serially(async () => {
+      const page = await this.storeFor(roomId).pageAt({before: filter.before}, 100);
+      if (!page) throw new Error("筛选游标不存在");
+      const messages = page.messages.filter(m => !m.deleted && (!filter.adopted || m.plainText.startsWith("【已采纳的项目建议】")) && (!filter.authors || filter.authors.includes(m.creator.id)) && (!filter.since || m.createdAt >= filter.since) && (!filter.until || m.createdAt < filter.until));
+      return {messages, hasMore: page.hasMore, before: page.messages[0]?.id ?? null};
+    });
+  }
+
+  /** Persist an adoption as an ordinary, searchable message, with the same idempotency as a post. */
+  async projectAdoptionExists(roomId: RoomId, user: User, clientMessageId: string): Promise<boolean> {
+    return this.serially(async () => (await this.storeFor(roomId).storedClientMessageIds(user, [clientMessageId])).length > 0);
+  }
+
+  private feedbackFor(roomId: RoomId): ProjectFeedbackStore {
+    return new ProjectFeedbackStore(openDb(this.env, this.ctx.storage, "project"), roomId);
+  }
+  async projectFeedback(roomId: RoomId, before?: string) {return this.serially(() => this.feedbackFor(roomId).list(before));}
+  async projectFeedbackHistory(roomId: RoomId, id: string) {return this.serially(async () => ({item: await this.feedbackFor(roomId).get(id), events: await this.feedbackFor(roomId).history(id)}));}
+  async createProjectFeedback(roomId: RoomId, input: NewFeedback, actor: User, adopted = false, proposalMessageId: string | null = null, authorizedAt = Date.now()) {
+    return this.serially(async () => {
+      if (await this.isDeleted() || await this.revocationsFor(roomId).refuse([actor.id], authorizedAt)) throw new Error("频道权限已变化");
+      return this.feedbackFor(roomId).create(input, actor, adopted, proposalMessageId);
+    });
+  }
+  async changeProjectFeedback(roomId: RoomId, id: string, input: ChangeFeedback, actor: User, canManage: boolean, assignee?: User | null, authorizedAt = Date.now()) {
+    return this.serially(async () => {
+      try {
+        if (await this.isDeleted() || await this.revocationsFor(roomId).refuse([actor.id], authorizedAt)) return {error: "频道权限已变化", status: 403};
+        const feedback = this.feedbackFor(roomId);
+        const item = await feedback.change(id, input, actor, canManage, assignee);
+        const event = (await feedback.event(input.requestId))!;
+        const store = this.storeFor(roomId);
+        if (!(await store.storedClientMessageIds(actor, [input.requestId])).length) {
+          const text = `【反馈落实更新】${item.title}\n状态：${feedbackStatuses[event.to]}\n记录人：${event.actor.name}\n${event.note}${event.evidence.length ? `\n交付依据：${event.evidence.map(e => `${e.label} ${e.url}`).join("；")}` : ""}\n${item.demo ? "本条为流程演示；" : ""}此记录仅更新本地反馈流程，不修改监控项目完成率。`;
+          const body = await this.prepare(bodyFromPlainText(text) + `<p><a href="/rooms/${roomId}?view=feedback&amp;feedback=${id}">查看落实与验收</a></p>`);
+          if (typeof body === "string") throw new Error(body);
+          await this.create(store, actor, input.requestId, body, new Date().toISOString(), {kind: "reply"});
+        }
+        return {item};
+      }
+      catch (error) {if (error instanceof FeedbackError) return {error: error.message, status: error.status}; throw error;}
+    });
+  }
+
+  async createProjectAdoption(roomId: RoomId, user: User, authorizedAt: number, clientMessageId: string, markup: string): Promise<Message | null> {
+    return this.serially(async () => {
+      if (await this.revocationsFor(roomId).refuse([user.id], authorizedAt) || await this.isDeleted()) throw new Error("频道权限已变化");
+      const store = this.storeFor(roomId);
+      if ((await store.storedClientMessageIds(user, [clientMessageId])).length) return null;
+      const body = await this.prepare(markup);
+      if (typeof body === "string") throw new Error(body);
+      return this.create(store, user, clientMessageId, body, new Date().toISOString(), {kind: "reply"});
+    });
+  }
+
   /** Everyone who wrote or reacted in the room, for the Workspace to keep when it registers a legacy room. */
   async authors(roomId: RoomId): Promise<User[]> {
     return this.serially(() => this.storeFor(roomId).authors());
@@ -589,16 +651,17 @@ export class ChatRoom extends DurableObject<Env> {
    * nothing of it, or null once the room has heard that the bot's access ended, or the room was deleted,
    * after the Workspace checked, as it turns away a socket then, or when it has no such thread.
    */
-  async createBotMessage(roomId: RoomId, { bot, authorizedAt }: BotAccess, markup: string, cards: Card[] = [], threadId?: string): Promise<Message | string | null> {
+  async createBotMessage(roomId: RoomId, { bot, authorizedAt }: BotAccess, markup: string, cards: Card[] = [], threadId?: string, deliveryId?: string): Promise<Message | string | null> {
     return this.serially(async () => {
       const now = new Date().toISOString();
       if (await this.revocationsFor(roomId).refuse([bot.id], authorizedAt)) return null;
       const store = this.storeFor(roomId);
+      if (deliveryId && (await store.storedClientMessageIds(bot, [deliveryId])).length) return "already_posted";
       const inThread = threadId === undefined ? undefined : await this.inThread(store, threadId, false);
       if (inThread === null) return null;
       const body = await this.prepareWithCards(markup, cards);
       if (typeof body === "string") return body;
-      return this.create(store, bot, crypto.randomUUID(), body, now, { inThread });
+      return this.create(store, bot, deliveryId ?? crypto.randomUUID(), body, now, { inThread });
     });
   }
 
@@ -1626,7 +1689,7 @@ export class ChatRoom extends DurableObject<Env> {
     const given = takesTools ? givenTools(access.appTools) : [];
     const askedBy = { roomId, askerId: author.id };
     const appTools = given.map((tool) => appTool(this.env, bot.id, tool, askedBy, { described: tool, shown: this.showsCallsOf(roomId, access, message, tool), cards: this.showsCardsOf(roomId, bot, message, tool) }));
-    const tools = takesTools ? [roomSearch(this.env, roomId, read), ...appTools] : [];
+    const tools = takesTools ? [roomSearch(this.env, roomId, read), ...projectTools(this.env,roomId,author.id), ...appTools] : [];
     const asked = { ...questionFor({ ...bot, instructions, promptTemplate }, conversation, author, where, levels, new Date(), webTools, webSearchOn), tools };
     const [answered, people] = await Promise.all([askWaiting(this.env, gateway, asked, waitFor(asked)), this.peopleWhoWrote(conversation)]);
     return this.outcomeOf(access, message, answered, writtenBy(people, conversation, where.inThread), given.map(givenAs));
@@ -1648,7 +1711,7 @@ export class ChatRoom extends DurableObject<Env> {
     const read = readable(conversation, inThread).map(({ id }) => id);
     const asked = { roomId, askerId: call.asker.id };
     const appTools = call.tools.map((tool) => appTool(this.env, bot.id, tool, asked, { shown: this.showsCallsOf(roomId, access, message, tool), cards: this.showsCardsOf(roomId, bot, message, tool) }));
-    const tools = [roomSearch(this.env, roomId, read), ...appTools];
+    const tools = [roomSearch(this.env, roomId, read), ...projectTools(this.env,roomId,asked.askerId), ...appTools];
     const [answered, people] = await Promise.all([goOn(this.env, gateway, tools, call.paused, allowed, waitFor(call.paused.question)), this.peopleWhoWrote(conversation)]);
     return this.outcomeOf(access, message, answered, writtenBy(people, conversation, inThread), call.tools);
   }
@@ -2105,3 +2168,4 @@ export class ChatRoom extends DurableObject<Env> {
     }
   }
 }
+import { projectTools } from "./pulse";

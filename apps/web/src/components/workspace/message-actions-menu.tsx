@@ -14,11 +14,12 @@ import {
   type RefObject,
 } from "react";
 import { QUICK_REACTION_COUNT, REACTIONS, type Message, type StoredFile } from "@ember/protocol";
-import type { DisplayNode } from "@ember/richtext/dom";
-import { ChatPlusIn, Copy, Download, Edit, Emoji, MessageText, MoreHoriz, QuoteMessage, ShareAndroid, Trash } from "@/components/icons/iconoir";
+import { editableBody, type DisplayNode } from "@ember/richtext/dom";
+import { AtSign, ChatBubbleQuestion, ChatPlusIn, CheckCircle, Copy, Download, Edit, Emoji, MessageText, MoreHoriz, QuoteMessage, ShareAndroid, Trash } from "@/components/icons/iconoir";
 import { PageLink } from "@/components/page-link";
 import { ShareButton } from "@/components/share-button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAccount } from "@/hooks/use-account";
 import { mentionedPerson, PeopleContext, useNameOf } from "@/hooks/use-directory";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { permalinkOf } from "@/hooks/use-route";
@@ -28,6 +29,7 @@ import { canShare } from "@/lib/share";
 import { cn } from "@/lib/utils";
 import { COPY_CODE } from "./code-block";
 import { UNKNOWN_PERSON } from "./message-body";
+import {ProjectAssistantContext, ProjectChatContext} from "./project-chat-context";
 
 /** With a mouse, the bar overlaps its message. */
 const OVERLAPPING = "(hover: hover) and (pointer: fine)";
@@ -68,7 +70,7 @@ interface Props {
   threadPath?: string;
   onReact: (emoji: string) => void;
   /** Writes a reply in the composer, given the quote it starts with. */
-  onQuote: (quote: string) => void;
+  onQuote: (quote: string, append?: boolean) => void;
   onEdit: () => void;
   /** Deletes the message, from More actions, answering whether the deletion was sent. */
   onDelete: () => boolean;
@@ -100,6 +102,28 @@ export interface MessageActionsHandle {
  * Copy link, and on messages you can change, Edit message and Delete message.
  */
 export function MessageActionsMenu({ message, nodes, row, threaded, editable, threadPath, onReact, onQuote, onEdit, onDelete, onNewBoost, ref }: Props) {
+  const project = useContext(ProjectChatContext);
+  const assistant = useContext(ProjectAssistantContext);
+  const nameOf = useNameOf();
+  const compact = useAccount().name === "Project Pulse · 研发协作中心";
+  const reactionsLabel = compact ? "表情回应" : "More reactions";
+  const askPrivately = () => {
+    close();
+    assistant?.askPrivately(message);
+  };
+
+  const askInDiscussion = () => {
+    const bot = assistant?.bot;
+    if (!bot) return;
+    const mention = editableBody(
+      `<p><action-text-attachment sgid="${bot.id}" content-type="application/vnd.campfire.mention"></action-text-attachment> 这条消息涉及的事项还差什么？</p>`,
+      () => bot, location.hostname,
+    );
+    const excerpt = message.plainText.trim().slice(0, 600) || "附件";
+    const quoted = replyQuote([{kind: "text", value: excerpt}], nameOf(message.creator), permalinkOf(message), () => "");
+    close();
+    onQuote(quoted + mention, true);
+  };
   const [open, setOpen] = useState(false);
   const [trayOpen, setTrayOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -119,6 +143,7 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
   const bar = useRef<HTMLDivElement>(null);
   const tray = useRef<HTMLDivElement>(null);
   const more = useRef<HTMLButtonElement>(null);
+  const touchMore = useRef<HTMLButtonElement>(null);
   const actionsPanel = useRef<HTMLDivElement>(null);
   const overlapping = useMediaQuery(OVERLAPPING);
   const menuId = useId();
@@ -240,7 +265,7 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
     // Add a boost goes if the message's last reaction does while the bar is open.
     const anchor = boostTrigger.current?.isConnected ? boostTrigger.current : trigger.current!;
     const panel = actionsOpen ? actionsPanel.current! : tray.current!;
-    if (!placeMenu({ row: row.current!, container: container.current, trigger: trigger.current!, anchor, menu: menu.current!, bar: bar.current!, panel, overlapping })) close();
+    if (!placeMenu({ row: row.current!, container: container.current, trigger: trigger.current!, anchor, menu: menu.current!, bar: bar.current!, panel, overlapping, compact })) close();
   };
 
   const hovered = useEffectEvent((event: PointerEvent) => {
@@ -303,7 +328,7 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
       more.current?.focus({ preventScroll: true });
     } else if (actionsOpen) {
       setActionsOpen(false);
-      trigger.current?.focus({ preventScroll: true });
+      (touchMore.current ?? trigger.current)?.focus({ preventScroll: true });
     } else {
       close();
       trigger.current?.focus({ preventScroll: true });
@@ -399,19 +424,20 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
             className={cn(
               PANEL,
               "flex flex-wrap items-center p-1 group-data-[two-rows]/menu:grid group-data-[two-rows]/menu:grid-cols-[repeat(4,auto)] group-data-[two-rows]/menu:justify-self-end",
+              compact && "justify-self-end rounded-lg p-0.5",
               overlapping && "pr-9 touch:pr-12",
             )}
           >
-            <div role="group" aria-label="Quick reactions" className="flex flex-wrap group-data-[two-rows]/menu:col-span-3">
+            {!compact && <div role="group" aria-label="Quick reactions" className="flex flex-wrap group-data-[two-rows]/menu:col-span-3">
               {REACTIONS.slice(0, QUICK_REACTION_COUNT).map(([emoji, title]) => (
                 <Reaction key={emoji} emoji={emoji} title={title} onClick={() => react(emoji)} />
               ))}
-            </div>
-            <ActionTooltip label="More reactions">
+            </div>}
+            <ActionTooltip label={reactionsLabel}>
               <button
                 ref={more}
                 type="button"
-                aria-label="More reactions"
+                aria-label={reactionsLabel}
                 aria-expanded={trayOpen}
                 aria-controls={trayId}
                 className={cn(ACTION, "aria-expanded:bg-hover")}
@@ -420,6 +446,18 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
                 <Emoji />
               </button>
             </ActionTooltip>
+            {compact && !message.attachment && <ActionTooltip label="引用">
+              <QuoteButton message={message} nodes={nodes} aria-label="引用" className={ACTION} onQuote={quote}><QuoteMessage /></QuoteButton>
+            </ActionTooltip>}
+            {compact && assistant && <ActionTooltip label="私下问项目助手">
+              <button type="button" aria-label="私下问项目助手" className={ACTION} onClick={askPrivately}><ChatBubbleQuestion /></button>
+            </ActionTooltip>}
+            {compact && assistant?.bot && <ActionTooltip label="在群里 @ 项目助手">
+              <button type="button" aria-label="在群里 @ 项目助手" className={ACTION} onClick={askInDiscussion}><AtSign /></button>
+            </ActionTooltip>}
+            {compact && project?.adopt && <ActionTooltip label="采纳此条">
+              <button type="button" aria-label="采纳此条" className={ACTION} onClick={() => {close(); project.adopt!(message);}}><CheckCircle /></button>
+            </ActionTooltip>}
             {threadPath !== undefined && (
               <ActionTooltip label="Reply in thread">
                 <PageLink href={threadPath} aria-label="Reply in thread" className={ACTION} onClick={close}>
@@ -428,10 +466,12 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
               </ActionTooltip>
             )}
             {/* More actions holds Quote and Copy link with a mouse. */}
+            {!compact && !overlapping && project?.adopt && <ActionTooltip label="采纳此条"><button type="button" className={ACTION} aria-label="采纳此条" onClick={() => {close(); project.adopt!(message);}}><MessageText/></button></ActionTooltip>}
+            {!compact && !overlapping && project?.add && <ActionTooltip label="加入多选采纳"><button type="button" className={ACTION} aria-label="加入多选采纳" onClick={() => {close(); project.add!(message);}}><ChatPlusIn/></button></ActionTooltip>}
             {message.attachment ? (
               <FileActions file={message.attachment} />
             ) : (
-              !overlapping && (
+              !compact && !overlapping && (
                 <ActionTooltip label="Quote">
                   <QuoteButton message={message} nodes={nodes} aria-label="Quote" className={ACTION} onQuote={quote}>
                     <QuoteMessage />
@@ -439,7 +479,7 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
                 </ActionTooltip>
               )
             )}
-            {!overlapping && (
+            {!compact && !overlapping && (
               <ActionTooltip label="Copy link">
                 <button type="button" aria-label="Copy link" className={ACTION} onClick={(event) => void copyLink(event, message)}>
                   <Copy />
@@ -447,25 +487,28 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
               </ActionTooltip>
             )}
             {/* As Campfire's `.message__edit-btn` shows (messages.css). */}
-            {editable && (
+            {!compact && editable && (
               <ActionTooltip label="Edit">
                 <button type="button" aria-label="Edit" className={ACTION} onClick={edit}>
                   <Edit />
                 </button>
               </ActionTooltip>
             )}
+            {compact && !overlapping && <ActionTooltip label="更多操作">
+              <button ref={touchMore} type="button" aria-label="更多操作" aria-expanded={actionsOpen} className={ACTION} onClick={toggleActions}><MoreHoriz /></button>
+            </ActionTooltip>}
           </div>
           <div
             ref={tray}
             id={trayId}
             role="group"
-            aria-label="More reactions"
+            aria-label={reactionsLabel}
             hidden={!trayOpen}
             className={cn(PANEL, "w-max max-w-full justify-self-end overflow-y-auto overscroll-contain p-2 group-data-[panel-above]/menu:-order-1")}
           >
-            <span className="mx-[3px] mb-[5px] block text-[11px] leading-normal font-medium text-muted-foreground">More reactions</span>
+            <span className="mx-[3px] mb-[5px] block text-[11px] leading-normal font-medium text-muted-foreground">{reactionsLabel}</span>
             <div className="flex flex-wrap">
-              {REACTIONS.slice(QUICK_REACTION_COUNT).map(([emoji, title]) => (
+              {REACTIONS.slice(compact ? 0 : QUICK_REACTION_COUNT).map(([emoji, title]) => (
                 <Reaction key={emoji} emoji={emoji} title={title} onClick={() => react(emoji)} />
               ))}
               <ActionTooltip label="New boost">
@@ -483,8 +526,12 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
             hidden={!actionsOpen}
             className={cn(PANEL, "w-max max-w-full justify-self-end overflow-y-auto overscroll-contain p-1 group-data-[panel-above]/menu:-order-1")}
           >
+            {!compact && assistant && <button type="button" className={ITEM} onClick={askPrivately}><MessageText/>私下问项目助手</button>}
+            {!compact && assistant?.bot && <button type="button" className={ITEM} onClick={askInDiscussion}><ChatPlusIn/>在群里 @ 项目助手</button>}
             {/* Quoting a file message would quote nothing, as its text is empty. */}
-            {!message.attachment && (
+            {!compact && project?.adopt && <button type="button" className={ITEM} onClick={() => {close(); project.adopt!(message);}}><MessageText/>采纳此条</button>}
+            {project?.add && <button type="button" className={ITEM} onClick={() => {close(); project.add!(message);}}><ChatPlusIn/>加入多选采纳</button>}
+            {!compact && !message.attachment && (
               <QuoteButton message={message} nodes={nodes} className={ITEM} onQuote={quote}>
                 <QuoteMessage />
                 Quote
@@ -627,6 +674,7 @@ interface Placed {
   /** What opens under the bar, or over it: More actions while it's open, or else the tray of more reactions. */
   panel: HTMLElement;
   overlapping: boolean;
+  compact: boolean;
 }
 
 /**
@@ -640,7 +688,7 @@ interface Placed {
  * doesn't fit beside its anchor. Answers false, placing nothing, once the row is out of the timeline's
  * sight, when the bar should close.
  */
-function placeMenu({ row, container, trigger, anchor, menu, bar, panel, overlapping }: Placed): boolean {
+function placeMenu({ row, container, trigger, anchor, menu, bar, panel, overlapping, compact }: Placed): boolean {
   const viewport = window.visualViewport;
   const top = viewport?.offsetTop || 0;
   const left = viewport?.offsetLeft || 0;
@@ -665,11 +713,20 @@ function placeMenu({ row, container, trigger, anchor, menu, bar, panel, overlapp
   let barTop = 0;
   let barHeight = 0;
   if (overlapping) {
-    barHeight = bar.getBoundingClientRect().height;
+    const barBox = bar.getBoundingClientRect();
+    barHeight = barBox.height;
+    const bubble = compact ? row.querySelector(".project-message-bubble, [data-message-action-anchor], [data-body-content] article")?.getBoundingClientRect() : undefined;
+    const sideBySide = bubble && bubble.right + 5 + barBox.width <= bounds.right;
+    right = sideBySide
+      ? bubble.right + 5 + barBox.width
+      : bubble
+        ? Math.min(bounds.right, Math.max(bounds.left + barBox.width, bubble.right))
+        : bounds.right - 8;
     // Overlapping the row by more than half the bar leaves the pointer a way across to it. Over a code
     // block's Copy code, as at the top of a follow-up, it sits on the block's edge instead.
-    const copyCode = copyCodeTop(row, Math.max(bounds.left, bounds.right - 8 - menuBox.width), bounds.right - 8);
-    barTop = Math.max(bounds.top, Math.min(rowBox.top - 17, copyCode - 6 - barHeight, bounds.bottom - barHeight));
+    const copyCode = copyCodeTop(row, Math.max(bounds.left, right - barBox.width), right);
+    const preferredTop = sideBySide ? bubble.top : bubble ? bubble.top - barHeight - 4 : rowBox.top - 17;
+    barTop = Math.max(bounds.top, Math.min(preferredTop, copyCode - 6 - barHeight, bounds.bottom - barHeight));
     const below = bounds.bottom - barTop - barHeight;
     const above = barTop - bounds.top;
     const panelAbove = !panel.hidden && menuBox.height - barHeight > below && above > below;
@@ -680,7 +737,6 @@ function placeMenu({ row, container, trigger, anchor, menu, bar, panel, overlapp
     }
     // Opening the tray or More actions mustn't move the bar off its row or out from under the pointer.
     y = panelAbove ? barTop - (menuBox.height - barHeight) : barTop;
-    right = bounds.right - 8;
   } else {
     menu.removeAttribute("data-panel-above");
     const anchorBox = anchor.getBoundingClientRect();

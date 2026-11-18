@@ -4,6 +4,8 @@ import { displayBody, isAllEmoji, type DisplayNode } from "@ember/richtext/dom";
 import { NavArrowRight } from "@/components/icons/iconoir";
 import { PageLink } from "@/components/page-link";
 import { PeopleContext } from "@/hooks/use-directory";
+import { useAccount } from "@/hooks/use-account";
+import { ProjectChatContext } from "./project-chat-context";
 import { messagePath, permalinkOf, threadPath } from "@/hooks/use-route";
 import { cardsQuote, dateTimeLabel, lastReplyLabel, timeLabel } from "@/lib/messages";
 import { isPending, type PendingMessage } from "@/lib/room-state";
@@ -17,6 +19,9 @@ import { MessageBoosts } from "./message-boosts";
 import { FixedMessageEditor, MessageEditor, type MessageEditorHandle } from "./message-editor";
 import { UploadCard } from "./upload-card";
 import { AvatarLink, UserAvatar, userTitle } from "./user-avatar";
+import { PulseReply } from "./pulse-reply";
+import { PulseSummaryCard } from "./pulse-summary-card";
+import { ProjectAdoptionCard } from "./project-adoption-card";
 
 export interface MessageActions {
   /** Returns whether the reaction was sent. */
@@ -45,7 +50,7 @@ export interface MessageEditors {
   /** Keeps a message's editor while it's open, for `open` to focus; called with null as it goes. */
   attach: (messageId: string, editor: MessageEditorHandle | null) => void;
   /** Writes a reply in the composer, starting with `quote`, in place of what's written there. */
-  reply: (quote: string) => void;
+  reply: (quote: string, append?: boolean) => void;
 }
 
 /** The room a thread's panel shows beside, as the reader reads its name, and whether it's a DM. */
@@ -78,7 +83,9 @@ interface Props {
  */
 function shownBody(body: string, plainText: string): DisplayNode[] | null {
   try {
-    return displayBody(body, plainText, location.hostname);
+    const nodes=displayBody(body, plainText, location.hostname);
+    if (!plainText.startsWith("【生成的演示讨论 · 依据监控快照】")) return nodes;
+    return nodes.filter(node=>!(node.kind==="element"&&node.name==="p"&&node.children.every(child=>child.kind==="text")&&/^PULSE(?:BACKGROUND|PR)\S+$/.test(node.children.map(child=>child.kind==="text"?child.value:"").join("").trim())));
   } catch (error) {
     console.error("Could not show a message", error);
     return null;
@@ -206,6 +213,8 @@ function Author({ user }: { user: User }) {
 
 /** One message: a 36px avatar gutter, author and time, then the body. */
 export const MessageItem = memo(function MessageItem({ message, me, threaded: follows, editing: editorOpen, actions, editors, thread, open }: Props) {
+  const coloured = useAccount().name === "Project Pulse · 研发协作中心";
+  const selection = useContext(ProjectChatContext);
   const article = useRef<HTMLElement>(null);
   const menu = useRef<MessageActionsHandle>(null);
   const attachEditor = useCallback((editor: MessageEditorHandle | null) => editors.attach(message.id, editor), [editors, message.id]);
@@ -265,10 +274,11 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
       // An upload stays busy until it's failed, so screen readers say why it failed but not every step it takes.
       aria-busy={(pending && !upload?.error) || undefined}
       className={cn(
-        "group/message relative grid grid-cols-[36px_minmax(0,1fr)] gap-x-2 px-5 hover:bg-message-hover max-md:grid-cols-[30px_minmax(0,1fr)] max-md:gap-x-2.5 max-md:px-3",
+        "group/message relative grid grid-cols-[36px_minmax(0,1fr)] gap-x-2 px-5 max-md:grid-cols-[30px_minmax(0,1fr)] max-md:gap-x-2.5 max-md:px-3",
+        !coloured && "hover:bg-message-hover",
         // A message that starts a run has 4px more above it, so a new author starts 12px below the
         // message before, while one person's messages stay 8px apart.
-        !threaded && "pt-1",
+        !threaded && (coloured ? "pt-2" : "pt-1"),
         // Where Message options is 44px, each message is at least as tall as it, so the buttons of short
         // messages in a row don't overlap.
         "touch:min-h-11",
@@ -277,7 +287,8 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
       )}
     >
       {/* The avatar sits 8px down, level with the author's name, and 4px below where the editor starts. */}
-      {!threaded && <AvatarLink user={message.creator} square className="mt-2 size-9 max-md:size-[30px]" />}
+      {!threaded && <AvatarLink user={message.creator} square={!coloured} className="mt-2 size-9 max-md:size-[30px]" />}
+      {selection && selection.active !== false && !pending && !editing && <label className="absolute top-1 right-1 z-10 flex cursor-pointer items-center gap-1 rounded bg-card px-1 py-0.5 text-[10px] text-muted-foreground"><input type="checkbox" aria-label={`选择 ${message.creator.name} 的消息：${message.plainText.slice(0, 45)}`} checked={selection.selected.has(message.id)} disabled={!selection.selected.has(message.id) && selection.selected.size >= 20} onChange={() => selection.toggle(message)}/>采纳</label>}
 
       {editing && (message.attachment || message.cards) ? (
         <FixedMessageEditor ref={attachEditor} onDelete={() => actions.remove(message.id) && editors.returnFocus()} onClose={() => editors.close(message.id)}>
@@ -302,7 +313,7 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
             allEmoji ? "py-0" : "py-1",
             threaded && "grid grid-cols-[minmax(0,max-content)_minmax(max-content,1fr)] items-start gap-x-2.5 touch:pr-8",
             // A message that mentions you, which wiggles as it shows, as Campfire's messages.css has it.
-            mentioned && "animate-wiggle border-l-2 border-mention bg-mention/10 pl-2 motion-reduce:animate-none",
+            mentioned && (coloured ? "animate-wiggle motion-reduce:animate-none" : "animate-wiggle border-l-2 border-mention bg-mention/10 pl-2 motion-reduce:animate-none"),
           )}
         >
           {/* The heading, a 15px h3, whose letters are spaced as headings' are. A follow-up's
@@ -333,12 +344,20 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
             </div>
           ) : (
             (message.body !== "" || !message.cards) && (
-              <MessageBody
+              coloured && message.creator.name === "项目助手" && /^(?:验收检查 |(?:项目速览|领导简报) · )/.test(message.plainText) && shown ?
+                <div className={threaded ? "col-start-1 row-start-1 min-w-0" : "touch:pr-8"}>
+                  <PulseSummaryCard nodes={shown} mentions={message.mentions} trailing={(threaded && edited) || undefined}/>
+                </div> :
+              coloured && message.plainText.startsWith("【已采纳的项目建议】") && shown ? <div className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}><ProjectAdoptionCard nodes={shown} mentions={message.mentions}/></div> : message.creator.name === "项目助手" && message.plainText.startsWith("【结构化查询模式，非 LLM 分析】") && shown ? <PulseReply nodes={shown} text={message.plainText} mentions={message.mentions} trailing={(threaded && edited) || undefined} className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}/> : <MessageBody
                 nodes={shown}
                 mentions={message.mentions}
                 emoji={allEmoji}
                 trailing={(threaded && edited) || undefined}
-                className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}
+                className={cn(
+                  threaded ? "col-start-1 row-start-1" : "touch:pr-8",
+                  coloured && !allEmoji && !message.cards && "project-message-bubble w-fit max-w-full rounded-xl px-3 py-1.5 sm:max-w-[min(100%,44rem)]",
+                  coloured && !allEmoji && !message.cards && message.creator.id === me.id && "project-message-bubble-own",
+                )}
               />
             )
           )}

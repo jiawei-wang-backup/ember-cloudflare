@@ -33,7 +33,7 @@ export function useMessageEditors(composer: RefObject<ComposerHandle | null>) {
         if (editor) open.set(messageId, editor);
         else open.delete(messageId);
       },
-      reply: (quote) => composer.current?.replace(quote),
+      reply: (quote, append) => composer.current?.replace(quote, append),
     };
   }, [composer]);
   return { editing, editors };
