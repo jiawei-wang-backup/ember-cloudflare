@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -35,7 +35,9 @@ const headersOf = (req: http.IncomingMessage) => {
   return headers;
 };
 mkdirSync(state, { recursive: true });
-const assetRoot = path.join(root, "apps/web/dist");
+const assetRoot = path.join(state, "web-dist");
+const webRoot = path.join(root, "apps/web");
+execFileSync(process.execPath, [path.join(webRoot, "node_modules/vite/bin/vite.js"), "build", "--mode", "demo-cn", "--outDir", assetRoot, "--emptyOutDir"], {cwd:webRoot, stdio:"inherit"});
 const staticPrefixes = ["/assets/", "/iconoir/", "/lucide/", "/logos/", "/browsers/", "/screenshots/", "/shortcuts/"];
 const mime: Record<string, string> = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".mp3": "audio/mpeg", ".woff2": "font/woff2"};
 async function staticAsset(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -135,6 +137,7 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   const config=path.join(state,"pulse.wrangler.json");
   if (existsSync(config)) {
     const configured = JSON.parse(readFileSync(config, "utf8"));
+    configured.assets.directory = assetRoot;
     configured.vars.PULSE_DEMO_SNAPSHOTS = JSON.stringify(projectSnapshots(state));
     const linkFile = path.join(state, "pulse-link.json");
     const sessionFile = path.join(state, "pulse-session.json");

@@ -14,7 +14,7 @@ export function projectSnapshots(state: string): Record<string, PulseSnapshot> {
     if (scoped && scoped.project.key === project.key && scoped.source === MONITOR_URL)
       return [project.key, {...scoped, freshness: {status: "snapshot", captured_at: snapshot.capturedAt}}];
     const raw: PulseDashboard = {
-      projects: [{repository_id: project.repositoryId!, full_name: project.key, status: project.status || "unknown", milestones: []}],
+      projects: [{repository_id: project.repositoryId!, full_name: project.fullName || project.report?.project_key || project.key, status: project.status || "unknown", milestones: []}],
       project_reports: project.report ? [project.report] : [], workspace_states: [], project_usage: [],
       memberships: project.sessions.map(s => ({display_name: s.display_name, full_name: project.key, workspace_name: null, session_count: 1, last_activity_at: s.last_activity_at})),
       sessions: project.sessions.map(s => ({...s, full_name: project.key})),

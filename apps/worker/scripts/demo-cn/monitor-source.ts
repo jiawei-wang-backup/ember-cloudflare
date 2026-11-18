@@ -1,6 +1,6 @@
 import {dashboardProject, type PulseDashboard} from "../../src/pulse-dashboard.ts";
 import type {PulseSnapshot} from "@ember/protocol";
-export const MONITOR_URL="http://192.168.16.70:4185/api/v1/dashboard?days=7";
+export const MONITOR_URL="http://192.168.20.189:4185/api/v1/dashboard?days=7";
 export const EXPECTED_PROJECTS=["project-pulse","jxaccount","mfa-approval","wzwx-score","deltaforce-game-library","xiaoxing-voice-changer"] as const;
 export const monitorProjectFullNames=["jiawei-wang-dev/project-pulse","JUXON-AI/jxaccount","JUXON-AI/mfa-approval","JUXON-AI/wzwx-score","juxon-ai/deltaforce-game-library","juxon-ai/xiaoxing-voice-changer"];
 export interface SourceSession {device_id?:string;session_id:string;workspace_name:string|null;repository_id:string|null;full_name:string|null;title:string|null;summary:string|null;display_name:string;project_state:string|null;last_activity_at:string}

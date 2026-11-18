@@ -11,6 +11,12 @@ const time = (value: string | null | undefined) => value ? new Date(value).toLoc
 const shortName = (name: string) => name.replace(/\s*[·•]\s*[a-f\d]{8,}$/i, "");
 const pullStates: Record<string, string> = {open: "待处理", merged: "已合并", closed: "已关闭"};
 
+function monitorProjectUrl(data: PulseSnapshot) {
+  const source = URL.canParse(data.source) ? new URL(data.source) : null;
+  if (!source || !["http:", "https:"].includes(source.protocol) || source.pathname !== "/api/v1/dashboard" || source.username || source.password) return null;
+  return source.origin + "/#/projects/" + encodeURIComponent(data.project.full_name);
+}
+
 function MemberName({name}: {name: string}) {
   const label = shortName(name);
   return <span className="inline-flex min-w-0 items-center gap-1.5" title={name}>
@@ -116,8 +122,12 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
   const ownerLabel = owners.map(shortName).join("、") || "暂无参与记录";
   const {input_tokens: input, output_tokens: output} = data.usage;
   const totalTokens = input == null || output == null ? null : (BigInt(input) + BigInt(output)).toString();
+  const monitorUrl = monitorProjectUrl(data);
   if (compact && data.business) return <Dialog open={expanded} onOpenChange={setExpanded}>
-    <button className="ml-auto shrink-0 whitespace-nowrap rounded-md border bg-card px-2.5 py-1.5 text-xs hover:bg-hover" onClick={() => setExpanded(true)}>项目统计</button>
+    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      {monitorUrl && <a href={monitorUrl} target="_blank" rel="noreferrer" className="whitespace-nowrap rounded-md px-2 py-1.5 text-xs text-message-muted hover:bg-hover hover:text-message-ink">监控面板 ↗</a>}
+    <button className="shrink-0 whitespace-nowrap rounded-md border bg-card px-2.5 py-1.5 text-xs hover:bg-hover" onClick={() => setExpanded(true)}>项目统计</button>
+    </div>
     <DialogContent className="flex h-[min(85dvh,680px)] min-h-0 flex-col sm:max-w-3xl"><DialogTitle>项目统计与原始依据</DialogTitle><DialogDescription className="sr-only">项目用量、成员及产出</DialogDescription>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span>参与成员：{ownerLabel}</span><div className="flex items-center gap-2"><select aria-label="项目统计时间窗" className="rounded border bg-card px-2 py-1" value={days} onChange={e => setDays(Number(e.target.value))}><option value={1}>近 1 天</option><option value={7}>近 7 天</option><option value={30}>近 30 天</option></select><button className="rounded border px-2 py-1 hover:bg-hover" disabled={loading} onClick={() => setRevision(n => n + 1)}>刷新统计</button></div></div>
       {data.freshness?.status === "snapshot" && <p className="text-xs text-message-muted">快照 · {time(data.freshness.captured_at)}</p>}

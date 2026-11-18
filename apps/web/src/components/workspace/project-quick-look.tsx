@@ -7,7 +7,7 @@ const introductions: Record<string, {
 }> = {
   "jiawei-wang-dev/project-pulse": {
     purpose: "把团队的开发进度和交付成果汇到一个看板，开会前一眼就能看清。",
-    trial: {href: "http://192.168.16.70:4185/", label: "打开局域网监控面板"},
+    trial: {href: "http://192.168.20.189:4185/", label: "打开局域网监控面板"},
   },
   "juxon-ai/jxaccount": {
     purpose: "让不同公司的员工用自己的飞书账号登录公司授权的业务系统。",

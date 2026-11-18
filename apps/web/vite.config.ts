@@ -1,3 +1,4 @@
+import { demoChinese } from "./locales/demo-chinese.ts";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
@@ -81,7 +82,7 @@ function appVersion(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), roomIcons(), oneAppScript(), appVersion()],
+  plugins: [demoChinese(), react(), tailwindcss(), roomIcons(), oneAppScript(), appVersion()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
