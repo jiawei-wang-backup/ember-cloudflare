@@ -36,7 +36,7 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
   const param = new URLSearchParams(location.search).get("group");
   const group = useAccount().name === "Project Pulse · 研发协作中心" && (param === "project" || param === "team") ? param : undefined;
   const title = group === "project" ? "新建项目频道" : group === "team" ? "新建团队协作频道" : "New room";
-  useTitle(title);
+  useTitle(group ? title : "New chat room");
   const [people, setPeople] = useState<User[] | null>(null);
   const [name, setName] = useState(group ? "" : DEFAULT_ROOM_NAME);
   const [icon, setIcon] = useState<RoomIconName | null>(null);

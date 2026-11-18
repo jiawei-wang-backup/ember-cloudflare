@@ -2,7 +2,7 @@ import { isRoomId, type RoomId, type UserId, type PulseSnapshot } from "@ember/p
 import { credentialsOf } from "./auth";
 import { workspace } from "./workspace";
 import type { Env } from "./env";
-import type { EmberTool } from "./assistant/tool-calls";
+import type { EmberTool, Unlogged } from "./assistant/tool-calls";
 import { dashboardProject } from "./pulse-dashboard";
 import {DashboardCache, fetchDashboard, type BackgroundWork} from "./pulse-dashboard-cache";
 import { pulseIntroduction } from "./pulse-context";
@@ -85,7 +85,7 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
   return Response.json({projects: results}, {headers});
 }
 
-export function projectTools(env: Env, roomId: RoomId, askerId: UserId): EmberTool[] {
+export function projectTools(env: Env, roomId: RoomId, askerId: UserId): (Omit<EmberTool, "run"> & {run(input: Record<string, unknown>): Promise<Unlogged>})[] {
   const binding = pulseBinding(env,roomId);
   if (!binding || !binding.memberIds.includes(askerId)) return [];
   const sections = {
@@ -101,6 +101,6 @@ export function projectTools(env: Env, roomId: RoomId, askerId: UserId): EmberTo
     if (![1,7,30].includes(days as number)) throw new Error("无效时间窗");
     const data=await pulseSnapshot(env,binding.projectId,days as number);
     const record={...data, business: businessOverview(data)} as unknown as Record<string,unknown>;
-    return JSON.stringify({project_id:binding.projectId,fetched_at:data.fetched_at,source:data.source,window:data.window,caveats:data.caveats,...Object.fromEntries(keys.map(k=>[k,record[k]]))});
+    return {unlogged: true as const, text: JSON.stringify({project_id:binding.projectId,fetched_at:data.fetched_at,source:data.source,window:data.window,caveats:data.caveats,...Object.fromEntries(keys.map(k=>[k,record[k]]))})};
   }}));
 }

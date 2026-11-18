@@ -50,7 +50,7 @@ it("runs a project usage tool against scoped structured data",async()=>{
   const bindings={...runtimeEnv,PULSE_URL:"https://pulse.example",PULSE_TOKEN:"secret",PULSE_ROOMS:JSON.stringify({[room.id]:{projectId,memberIds:[ada.user.id]}})} as unknown as Env;
   vi.spyOn(globalThis,"fetch").mockResolvedValue(Response.json({project:{repository_id:projectId},usage:{input_tokens:"100",cached_input_tokens:"90",output_tokens:"5"},models:[],cost:{amount:null},fetched_at:"2026-11-16",source:"test fixture",window:{days:7},caveats:[]}));
   const tool=projectTools(bindings,room.id,ada.user.id).find(t=>t.name==="get_project_usage")!;
-  const answer=JSON.parse(await tool.run({days:7,projectId:"other"}));
+  const answer=JSON.parse((await tool.run({days:7,projectId:"other"})).text);
   expect(answer.project_id).toBe(projectId);
   expect(answer.usage).toEqual({input_tokens:"100",cached_input_tokens:"90",output_tokens:"5"});
   expect(answer.members).toBeUndefined();
@@ -75,7 +75,7 @@ it("queries the configured LAN Dashboard for the bound workspace and never falls
   expect(fetch.mock.calls[0]![1]?.redirect).toBe("manual");
   const tools=projectTools({...runtimeEnv,...bindings} as Env,room.id,ada.user.id);
   const tool=tools.find(tool=>tool.name==="get_project_overview")!;
-  const scoped=JSON.parse(await tool.run({days:1}));
+  const scoped=JSON.parse((await tool.run({days:1})).text);
   expect(scoped.project_id).toBe("juxon-ai/deltaforce-game-library");
   expect(scoped.project.key).toBe(scoped.project_id);
   expect(scoped.source).toBe(data.source);

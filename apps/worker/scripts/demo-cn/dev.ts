@@ -38,7 +38,7 @@ mkdirSync(state, { recursive: true });
 const assetRoot = path.join(state, "web-dist");
 const webRoot = path.join(root, "apps/web");
 execFileSync(process.execPath, [path.join(webRoot, "node_modules/vite/bin/vite.js"), "build", "--mode", "demo-cn", "--outDir", assetRoot, "--emptyOutDir"], {cwd:webRoot, stdio:"inherit"});
-const staticPrefixes = ["/assets/", "/iconoir/", "/lucide/", "/logos/", "/browsers/", "/screenshots/", "/shortcuts/"];
+const staticPrefixes = ["/assets/", "/emojibase/", "/iconoir/", "/lucide/", "/logos/", "/browsers/", "/screenshots/", "/shortcuts/"];
 const mime: Record<string, string> = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".mp3": "audio/mpeg", ".woff2": "font/woff2"};
 async function staticAsset(req: http.IncomingMessage, res: http.ServerResponse) {
   try {

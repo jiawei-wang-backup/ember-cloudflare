@@ -10,12 +10,14 @@ import { useTitle } from "@/hooks/use-title";
 import type { Room } from "@/lib/api";
 import { roomName } from "@/lib/directs";
 import { rememberLastRoom } from "@/lib/last-room";
+import { newestWrittenBy } from "@/lib/messages";
 import type { RoomAnswer } from "@/lib/room-list";
 import { isPending } from "@/lib/room-state";
 import { Composer, RoomDeleted, type ComposerHandle } from "./composer";
 import { MessageList } from "./message-list";
 import { RoomHeader } from "./room-header";
 import { RoomNotice } from "./room-notice";
+import { useAccount } from "@/hooks/use-account";
 import { ProjectOverview } from "./project-overview";
 import { ThreadPanel } from "./thread-panel";
 import { ProjectChatTools } from "./project-chat-tools";
@@ -66,6 +68,7 @@ export interface RoomViewHandle {
 }
 
 export function RoomView({ room, messageId, threadId, replyId, invitation, onDismissInvitation, me, favorite, gone, onStarred, involvement, newSince = null, askForRoom, onSessionChanged, onFailed, onGone, ref }: Props) {
+  const projectWorkspace = useAccount().name === "Project Pulse · 研发协作中心";
   const [project, setProject] = useState<PulseSnapshot | null>(null);
   const [selection, setSelection] = useState<ProjectSelection | null>(null);
   const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft | null>(null);
@@ -139,11 +142,11 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
   // A thread that covers the room leaves nothing of it to reach until it's closed.
   const covered = useMediaQuery(THREAD_COVERS_ROOM) && threadId !== undefined;
 
-  // Up Arrow edits your newest message, unless it's still on its way, or the timeline is reading older
-  // history and may not hold it.
+  // Up Arrow edits the newest message you wrote, unless it's still on its way, or the timeline is reading
+  // older history and may not hold it.
   const editLastMessage = () => {
     if (state.hasNewer) return;
-    const newest = state.messages.findLast((message) => message.creator.id === me.id);
+    const newest = newestWrittenBy(state.messages, me.id);
     if (newest && !isPending(newest)) editors.open(newest.id);
   };
 
@@ -158,7 +161,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
         <RoomHeader
           room={room}
           name={name}
-          viewerId={me.id}
+          meId={me.id}
           present={state.present}
           status={state.status}
           offline={state.offline}
@@ -175,7 +178,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
           <RoomNotice notice={state.notice} onDismiss={dismissNotice} />
           <div className={currentProject?.business ? "flex shrink-0 items-center gap-2 border-b bg-surface px-3 py-2" : "contents"}>
           {currentProject?.business && <nav aria-label="项目工作区" className="flex min-w-0 flex-wrap items-center gap-1">{([["discussion", "项目讨论"], ["overview", "项目总览"], ["assistant", "项目助手"], ["feedback", "反馈与落实"]] as const).map(([value, label]) => <button key={value} aria-current={view === value ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => {if (view !== value) setView(value);}}>{label}</button>)}</nav>}
-          <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>
+          {projectWorkspace && <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>}
           </div>
           {currentProject?.business && view === "overview" && <ProjectBusiness key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
           {currentProject?.business && view === "assistant" && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}

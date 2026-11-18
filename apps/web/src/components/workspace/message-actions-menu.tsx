@@ -149,8 +149,8 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
   const menuId = useId();
   const trayId = useId();
   // What Copy text copies: the message's plain text, which holds a bot's cards' too. A file message has none
-  // but its file's name.
-  const text = message.attachment ? null : message.plainText;
+  // but its file's name, and a huddle's message none that it shows.
+  const text = message.attachment || message.huddle ? null : message.plainText;
 
   const show = (byHovering: boolean) => {
     hoverOpened.current = byHovering;
@@ -471,7 +471,7 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
             {message.attachment ? (
               <FileActions file={message.attachment} />
             ) : (
-              !compact && !overlapping && (
+              !compact && !overlapping && !message.huddle && (
                 <ActionTooltip label="Quote">
                   <QuoteButton message={message} nodes={nodes} aria-label="Quote" className={ACTION} onQuote={quote}>
                     <QuoteMessage />
@@ -531,7 +531,7 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
             {/* Quoting a file message would quote nothing, as its text is empty. */}
             {!compact && project?.adopt && <button type="button" className={ITEM} onClick={() => {close(); project.adopt!(message);}}><MessageText/>采纳此条</button>}
             {project?.add && <button type="button" className={ITEM} onClick={() => {close(); project.add!(message);}}><ChatPlusIn/>加入多选采纳</button>}
-            {!compact && !message.attachment && (
+            {!compact && !message.attachment && !message.huddle && (
               <QuoteButton message={message} nodes={nodes} className={ITEM} onQuote={quote}>
                 <QuoteMessage />
                 Quote
@@ -550,8 +550,8 @@ export function MessageActionsMenu({ message, nodes, row, threaded, editable, th
             {editable && (
               <>
                 <hr className="my-1 border-message-border" />
-                {/* The text of a file message, or of a bot's cards, can't be changed, so only the bar's Edit opens their editor. */}
-                {!message.attachment && !message.cards && (
+                {/* The text of a file message, of a bot's cards or of a huddle's message can't be changed, so only the bar's Edit opens their editor. */}
+                {!message.attachment && !message.cards && !message.huddle && (
                   <button type="button" className={ITEM} onClick={edit}>
                     <Edit />
                     Edit message
