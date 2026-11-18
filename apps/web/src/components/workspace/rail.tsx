@@ -1,5 +1,6 @@
-import { useContext, type MouseEvent } from "react";
+import { useContext, useState, type ReactNode, type MouseEvent } from "react";
 import type { Me, NavigationSlot } from "@ember/protocol";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PageLink } from "@/components/page-link";
 import { useAccount } from "@/hooks/use-account";
 import { NEW_DIRECT_PATH, PROFILE_PATH, SEARCHES_PATH, WORKSPACE_SETTINGS_PATH } from "@/hooks/use-route";
@@ -91,6 +92,34 @@ interface Props {
   onNewDirect: (opener: HTMLElement) => void;
 }
 
+export function ChineseHeaderActions({me, activity, roomBell}: {me: Me; activity: Activity; roomBell?: ReactNode}) {
+  const [notifications, setNotifications] = useState(false);
+  const [account, setAccount] = useState(false);
+  const entry = "block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-hover";
+  return <div className="ml-auto flex shrink-0 items-center gap-1">
+    <Popover open={notifications} onOpenChange={setNotifications}>
+      <PopoverTrigger title="通知" aria-label={activity.unread ? `通知，${activity.unread} 个未读会话` : "通知"} className="relative grid size-9 place-items-center rounded-lg hover:bg-hover">
+        <NavigationIcon slot="activity" size={20}/>
+        {activity.unread > 0 && <span aria-hidden className="absolute right-1 top-1 size-2 rounded-full bg-primary"/>}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-48 p-1">
+        <button className={entry} aria-pressed={activity.on} onClick={() => {setNotifications(false); activity.onToggle();}}>
+          {activity.on ? "显示全部会话" : `查看未读会话（${activity.unread}）`}
+        </button>
+        {roomBell && <div className="flex items-center justify-between border-t px-3 py-1 text-sm">本频道通知{roomBell}</div>}
+      </PopoverContent>
+    </Popover>
+    <Popover open={account} onOpenChange={setAccount}>
+      <PopoverTrigger aria-label="账号菜单" title={me.name} className="rounded-full p-1 hover:bg-hover"><UserAvatar user={me} className="size-7"/></PopoverTrigger>
+      <PopoverContent align="end" className="w-44 p-1">
+        <PageLink className={entry} href={PROFILE_PATH} onClick={() => setAccount(false)}>个人资料</PageLink>
+        <PageLink className={entry} href={WORKSPACE_SETTINGS_PATH} onClick={() => setAccount(false)}>{me.administrator ? "管理" : "工作区设置"}</PageLink>
+        <div className="flex items-center justify-between border-t px-3 py-1 text-sm">外观<AppearanceMenu/></div>
+      </PopoverContent>
+    </Popover>
+  </div>;
+}
+
 /**
  * The persistent navigation rail, drawn with the icons an administrator chose in Community settings, or
  * else with Iconoir's, as the project's owner chose. Admin has a dot while a newer release of Ember is
@@ -100,6 +129,12 @@ export function Rail({ me, workspaceName, current, activity, newRelease, onNewDi
   const { logo } = useAccount();
   const openSearch = useContext(OpenSearchContext);
   const marked = activity.on ? null : current;
+  if (workspaceName === "Project Pulse · 研发协作中心") return (
+    <nav aria-label="工作区导航" className="flex h-full w-[calc(var(--spacing-rail)+env(safe-area-inset-left))] flex-col items-center gap-2 border-r bg-surface pt-4 pl-[env(safe-area-inset-left)]">
+      <RailLink slot="home" label="频道" href="/" current={marked === "home" || marked === "room"}/>
+      <RailLink slot="search" label="搜索" href={SEARCHES_PATH} current={marked === "search"} onClick={opensSearch(openSearch)}/>
+    </nav>
+  );
   return (
     // Scrolls when a short screen (a phone in landscape) can't fit it all; widens by the notch's inset.
     <nav

@@ -45,6 +45,15 @@ const membersOf = async (roomId: RoomId) =>
   (await workspaceSql("SELECT user_id, involvement FROM memberships WHERE room_id = ? ORDER BY user_id", roomId)) as Array<{ user_id: string; involvement: string }>;
 
 describe("Open rooms everyone is in", () => {
+  it("keeps the chosen channel group in another member's sidebar", async () => {
+    const ada = await signIn("Ada");
+    const grace = await signIn("Grace");
+    const response = await api("/api/rooms", {method: "POST", headers: {Cookie: ada.cookie, "Content-Type": "application/json"}, body: JSON.stringify({name: "Design", kind: "open", channelGroup: "project"})});
+    expect(response.status).toBe(201);
+    const {room} = await response.json() as {room: {id: RoomId}};
+    expect(await listed(grace, room.id)).toMatchObject([{channelGroup: "project"}]);
+  });
+
   it("puts everyone in every open room, whether they joined before or after it was made", async () => {
     const ada = await signIn("Ada");
     const room = await createRoom("Design");

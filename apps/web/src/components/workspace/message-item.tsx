@@ -351,6 +351,7 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
               coloured && message.plainText.startsWith("【已采纳的项目建议】") && shown ? <div className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}><ProjectAdoptionCard nodes={shown} mentions={message.mentions}/></div> : message.creator.name === "项目助手" && message.plainText.startsWith("【结构化查询模式，非 LLM 分析】") && shown ? <PulseReply nodes={shown} text={message.plainText} mentions={message.mentions} trailing={(threaded && edited) || undefined} className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}/> : <MessageBody
                 nodes={shown}
                 mentions={message.mentions}
+                compactCardQuotes={coloured}
                 emoji={allEmoji}
                 trailing={(threaded && edited) || undefined}
                 className={cn(

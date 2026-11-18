@@ -1,12 +1,14 @@
-import { Fragment, useContext, useEffect, useId, useMemo, useState, type MouseEvent } from "react";
+import { Fragment, useContext, useEffect, useId, useMemo, useState, type ReactNode, type MouseEvent } from "react";
 import type { Favorites, LiveHuddle, Me, RoomId, SidebarRoom, User, UserId, PulseProjectSummary } from "@ember/protocol";
 import { ChatPlusIn, Headset, StarSolid } from "@/components/icons/iconoir";
+import { PageLink } from "@/components/page-link";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RoomIcon } from "@/components/icons/room-icon";
 import { useAccount } from "@/hooks/use-account";
 import { PeopleContext, useNameOf } from "@/hooks/use-directory";
 import { useRoomDrag, type OrderStatus } from "@/hooks/use-room-drag";
 import { useMounted } from "@/hooks/use-mounted";
-import { leave, NEW_DIRECT_PATH, roomPath } from "@/hooks/use-route";
+import { leave, NEW_DIRECT_PATH, newRoomPath, roomSettingsPath, roomPath } from "@/hooks/use-route";
 import { useStarOrder } from "@/hooks/use-star-order";
 import { membersShown } from "@/lib/directs";
 import { inItsHuddle } from "@/lib/huddle-people";
@@ -41,6 +43,7 @@ interface Props {
   workspaceName: string;
   /** Who the sidebar is for, whose DMs name the others in them. */
   meId: UserId;
+  administrator?: boolean;
   /** Someone's rooms and DMs, in the order they were put in them, which the rooms neither starred nor ranked keep. */
   rooms: SidebarRoom[];
   /** Whether their list has come, before which nothing says there's nothing in it. */
@@ -81,7 +84,7 @@ interface Props {
  */
 export function Sidebar({
   workspaceName,
-  meId,
+  meId, administrator,
   rooms,
   loaded,
   suggestions,
@@ -96,7 +99,7 @@ export function Sidebar({
   onStarred,
   onSessionChanged,
 }: Props) {
-  const { tagline } = useAccount();
+  const { tagline, restrictRoomCreation } = useAccount();
   const { shared, directs } = useMemo(() => apart(unreadOnly ? rooms.filter((room) => markedUnread(room, currentRoomId)) : rooms), [rooms, unreadOnly, currentRoomId]);
   const shown = useMemo(() => new Set(shared.map((room) => room.id)), [shared]);
   const nameOf = (roomId: RoomId) => {
@@ -120,13 +123,14 @@ export function Sidebar({
   }, [grouped, storageKey]);
   const savedIds = saved?.key === storageKey ? saved.ids : [];
   const ranked = grouped ? inSidebarOrder(listed, savedIds) : listed;
-  const roomGroups = new Map(ranked.map(room => [room.id, pulseGroup(room.name)]));
+  const roomGroups = new Map(ranked.map(room => [room.id, (room.channelGroup === "project" ? PULSE_GROUPS[0] : room.channelGroup === "team" ? PULSE_GROUPS[1] : pulseGroup(room.name))]));
   const groupedIds = grouped ? PULSE_GROUPS.flatMap(group => ranked.filter(room => roomGroups.get(room.id) === group).map(room => room.id)) : [];
   const groupedDrag = useRoomDrag({
     order: groupedIds,
     movable: grouped && !unreadOnly ? groupedIds : [],
     groupOf: id => roomGroups.get(id),
     holdMs: 400,
+    dragOnPointerMove: true,
     isLocked: () => false,
     onDrag: id => setGroupStatus({message: `正在移动 ${nameOf(id)}，松开即可保存。`, error: false}),
     onCancel: () => setGroupStatus({message: "已取消移动。", error: false}),
@@ -158,6 +162,12 @@ export function Sidebar({
     : listed;
   const starred = useMemo(() => new Set(stars.order), [stars.order]);
   const groupSizes = new Map(PULSE_GROUPS.map(group => [group, displayed.filter(room => roomGroups.get(room.id) === group).length]));
+  const canCreate = administrator || !restrictRoomCreation;
+  const groupHeading = (group: typeof PULSE_GROUPS[number]) => <div key={group} className="flex items-center gap-2 px-[9px] pt-2 text-xs text-muted-foreground">
+    <h3 className="flex-1 font-medium">{group}</h3><span className="text-[10px] tabular-nums">{groupSizes.get(group)}</span>
+    {canCreate && group !== "交付汇总" && <PageLink href={newRoomPath(group === "项目频道" ? "closed" : "open") + (group === "项目频道" ? "?group=project" : "?group=team")}
+      aria-label={`新建${group}`} title={`新建${group}`} className="grid size-7 place-items-center rounded-md text-lg hover:bg-hover">+</PageLink>}
+  </div>;
   const directsListed = useMemo(() => inDirectOrder(directs), [directs]);
   // Activity hides the suggestions.
   const suggested = useMemo(() => (unreadOnly ? [] : suggestedPeople(suggestions, rooms)), [unreadOnly, suggestions, rooms]);
@@ -194,7 +204,7 @@ export function Sidebar({
           narrower sidebar or wider letters than its length allows for. */}
       <hgroup className="px-1.5 max-md:pr-10">
         <h2 className="flex min-h-7 items-center gap-2 text-[17px] leading-6 font-[650] wrap-anywhere">{workspaceName}</h2>
-        {tagline && <p className="text-[13px] leading-[18px] text-muted-foreground wrap-anywhere">{tagline}</p>}
+        {!grouped && tagline && <p className="text-[13px] leading-[18px] text-muted-foreground wrap-anywhere">{tagline}</p>}
       </hgroup>
 
       <section aria-label="Rooms" className="flex flex-col">
@@ -205,18 +215,21 @@ export function Sidebar({
           Unread
         </span>
         <div ref={listRef} {...listProps} className={cn("flex flex-col gap-[3px]", moving && "select-none")}>
+          {grouped && loaded && !unreadOnly && canCreate && PULSE_GROUPS.slice(0,2).filter(group => !groupSizes.get(group)).map(groupHeading)}
           {displayed.map((room,index) => {
             const unread = markedUnread(room, currentRoomId);
             const star = starred.has(room.id);
             const projectName = grouped ? PULSE_PROJECTS.get(room.name) : undefined;
             const label = projectName ? `${projectName}（${room.name}）` : room.name;
-            const movable = grouped ? !unreadOnly && (groupSizes.get(pulseGroup(room.name)) ?? 0) > 1 : star;
+            const group = roomGroups.get(room.id)!;
+            const movable = grouped ? !unreadOnly && (groupSizes.get(group) ?? 0) > 1 : star;
             const huddle = huddles[room.id];
             // The words for who's in the room's huddle, which come with its mark.
             const inHuddleId = `${huddleId}-${room.id}`;
             return (
               <Fragment key={room.id}>
-              {grouped && (index===0 || pulseGroup(displayed[index-1]!.name)!==pulseGroup(room.name)) && <h3 className={cn("flex items-center justify-between px-[9px] pt-3 pb-1 text-[11px] font-medium text-muted-foreground", index===0&&"pt-0")}><span>{pulseGroup(room.name)}</span><span className="text-[10px] tabular-nums">{groupSizes.get(pulseGroup(room.name))}</span></h3>}
+              {grouped && (index === 0 || roomGroups.get(displayed[index-1]!.id) !== group) && groupHeading(group)}
+              <ChatRowMenu enabled={grouped} room={room}>
               <a
                 data-room-id={room.id}
                 href={roomPath(room.id)}
@@ -248,6 +261,7 @@ export function Sidebar({
                 {unread && <span aria-hidden="true" className={cn("size-[7px] shrink-0 rounded-full bg-foreground", !huddle && "ml-auto")} />}
                 {star && <StarSolid aria-label="Favorite" className={cn("size-3.5 shrink-0 text-muted-foreground/65", !huddle && !unread && "ml-auto")} />}
               </a>
+              </ChatRowMenu>
               </Fragment>
             );
           })}
@@ -260,11 +274,11 @@ export function Sidebar({
 
       <section aria-labelledby="directs-heading" className="flex flex-col gap-[3px]">
         <div className="mb-[5px] flex items-center gap-2 px-[9px] text-xs font-medium text-muted-foreground">
-          <h3 id="directs-heading">DMs</h3>
+          <h3 id="directs-heading">{grouped ? "私聊" : "DMs"}</h3>
           <a
             href={NEW_DIRECT_PATH}
-            title="New direct message"
-            aria-label="New direct message"
+            title={grouped ? "发起私聊" : "New direct message"}
+            aria-label={grouped ? "发起私聊" : "New direct message"}
             onClick={opensNewDirect(onNewDirect)}
             className="ml-auto flex size-7 items-center justify-center rounded-lg text-foreground hover:bg-hover touch:size-11"
           >
@@ -272,14 +286,14 @@ export function Sidebar({
           </a>
         </div>
         {directsListed.map((room) => (
-          <DirectRow
+          <ChatRowMenu key={room.id} enabled={grouped} room={room}><DirectRow
             key={room.id}
             room={room}
             meId={meId}
             current={room.id === currentRoomId}
             unreadId={markedUnread(room, currentRoomId) ? unreadId : null}
             onClick={(event) => select(event, room.id)}
-          />
+          /></ChatRowMenu>
         ))}
         {suggested.map((person) => (
           <SuggestionRow key={person.id} person={person} starting={person.id === starting} onClick={() => startWith(person)} />
@@ -399,4 +413,18 @@ function SuggestionRow({ person, starting, onClick }: SuggestionRowProps) {
       </span>
     </button>
   );
+}
+
+
+function ChatRowMenu({enabled, room, children}: {enabled: boolean; room: SidebarRoom; children: ReactNode}) {
+  const [open, setOpen] = useState(false);
+  if (!enabled) return <>{children}</>;
+  const label = room.kind === "direct" ? "私聊设置" : "编辑频道";
+  return <div className="group/chat relative [&>a]:pr-8" onContextMenu={event => {event.preventDefault(); setOpen(true);}}>
+    {children}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger aria-label={label + "选项"} title={label} className="absolute right-0.5 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-message-muted opacity-0 hover:bg-hover group-hover/chat:opacity-100 group-focus-within/chat:opacity-100 data-[state=open]:opacity-100 touch:opacity-100">⋯</PopoverTrigger>
+      <PopoverContent align="end" className="w-36 p-1"><PageLink href={roomSettingsPath(room.kind, room.id)} onClick={() => setOpen(false)} className="block rounded px-3 py-2 text-sm hover:bg-hover">{label}</PageLink></PopoverContent>
+    </Popover>
+  </div>;
 }

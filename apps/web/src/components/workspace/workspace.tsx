@@ -28,8 +28,8 @@ import { MovedNotice } from "./moved-notice";
 import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog";
 import { NewDirectDialog } from "./new-direct-dialog";
 import { Notices } from "./notices";
-import { DrawerOpen, PageHeader } from "./page-header";
-import { Rail, type RailPage } from "./rail";
+import { DrawerOpen, PageHeader, WorkspaceHeaderActions } from "./page-header";
+import { ChineseHeaderActions, Rail, type RailPage } from "./rail";
 import { RoomView, type RoomViewHandle } from "./room-view";
 import { OpenSearchContext, SearchBox, type SearchBoxOptions } from "./search-box";
 import { SettingsLayout, settingsSectionOf, type SettingsPlace } from "./settings-navigation";
@@ -622,6 +622,7 @@ export function Workspace({ me, workspaceName, onAccountChanged, onSignOut, onSe
     <Sidebar
       workspaceName={workspaceName}
       meId={me.id}
+      administrator={me.administrator}
       rooms={rooms ?? NO_ROOMS}
       loaded={rooms !== null}
       suggestions={suggestions}
@@ -848,7 +849,13 @@ export function Workspace({ me, workspaceName, onAccountChanged, onSignOut, onSe
             )}
           </SheetContent>
 
-          {page()}
+          <WorkspaceHeaderActions value={workspaceName === "Project Pulse · 研发协作中心" ? roomBell =>
+            <ChineseHeaderActions me={me} roomBell={roomBell} activity={{...activity, onToggle: () => {
+              activity.onToggle();
+              if (matchMedia(DRAWER_LAYOUT).matches) afterNavigating(() => setDrawerOpen(true));
+            }}}/> : null}>
+            {page()}
+          </WorkspaceHeaderActions>
           <Notices>
             <MovedNotice />
             <UpdatedNotice />

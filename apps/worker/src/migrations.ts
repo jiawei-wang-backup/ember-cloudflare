@@ -60,6 +60,7 @@ import appSignInClients from "../migrations/0059_app_sign_in_clients.sql";
 import appScopeWanted from "../migrations/0060_app_scope_wanted.sql";
 import ownAppSignIns from "../migrations/0061_own_app_sign_ins.sql";
 import outsideAi from "../migrations/0062_outside_ai.sql";
+import channelGroup from "../migrations/0064_channel_group.sql";
 import projectFeedback from "../migrations/0063_project_feedback.sql";
 import searchIndex from "../search-migrations/0001_search_index.sql";
 import searchResults from "../search-migrations/0002_search_results.sql";
@@ -149,6 +150,7 @@ export const MIGRATIONS: Migration[] = [
   { name: "0062_outside_ai.sql", scope: "workspace", sql: outsideAi },
   // Lazy, only when an authorised project workflow is opened. Ordinary rooms are untouched.
   { name: "0063_project_feedback.sql", scope: "project", sql: projectFeedback },
+  { name: "0064_channel_group.sql", scope: "workspace", sql: channelGroup },
 ];
 
 /**

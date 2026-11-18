@@ -2,7 +2,7 @@ import {dashboardProject, type PulseDashboard} from "../../src/pulse-dashboard.t
 import type {PulseSnapshot} from "@ember/protocol";
 export const MONITOR_URL="http://192.168.16.70:4185/api/v1/dashboard?days=7";
 export const EXPECTED_PROJECTS=["project-pulse","jxaccount","mfa-approval","wzwx-score","deltaforce-game-library","xiaoxing-voice-changer"] as const;
-const fullNames=["jiawei-wang-dev/project-pulse","JUXON-AI/jxaccount","JUXON-AI/mfa-approval","JUXON-AI/wzwx-score","juxon-ai/deltaforce-game-library","juxon-ai/xiaoxing-voice-changer"];
+export const monitorProjectFullNames=["jiawei-wang-dev/project-pulse","JUXON-AI/jxaccount","JUXON-AI/mfa-approval","JUXON-AI/wzwx-score","juxon-ai/deltaforce-game-library","juxon-ai/xiaoxing-voice-changer"];
 export interface SourceSession {device_id?:string;session_id:string;workspace_name:string|null;repository_id:string|null;full_name:string|null;title:string|null;summary:string|null;display_name:string;project_state:string|null;last_activity_at:string}
 export interface SourceReport {device_id?:string;source_session_id?:string;project_key:string;goal:string;observed_at:string;milestones:Array<{title:string;state:string;evidence:string}>}
 export interface SourcePull {repository_id:string;number:string;title:string;url:string;state:string;is_draft:boolean;updated_at:string}
@@ -18,7 +18,7 @@ interface Dashboard {
 /** Fail closed before any Ember mutation when the source is not the screenshot projects. */
 export function normalizeMonitor(data:Dashboard):MonitorSnapshot {
   if(!Array.isArray(data.projects)||!Array.isArray(data.sessions)||!Array.isArray(data.pulls)||!Array.isArray(data.project_reports))throw new Error("监控服务响应不完整，拒绝同步。");
-  const projects=fullNames.map((fullName,index)=>{
+  const projects=monitorProjectFullNames.map((fullName,index)=>{
     const match=(value:string|null)=>value?.toLowerCase()===fullName.toLowerCase();
     const registered=data.projects.find(p=>match(p.full_name));
     const report=data.project_reports.filter(p=>match(p.project_key)).sort((a,b)=>b.observed_at.localeCompare(a.observed_at))[0]??null;

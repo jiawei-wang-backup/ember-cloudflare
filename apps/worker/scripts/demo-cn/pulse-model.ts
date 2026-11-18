@@ -4,8 +4,12 @@ import {pulseStatusLabels, threadPath, type PulseMessagePage, type PulseSnapshot
 import {html, paragraph} from "../seed/markup.ts";
 import {origin, state} from "./local.ts";
 
+import {monitorProjectFullNames} from "./monitor-source.ts";
+
+const modelProjects = new Set(monitorProjectFullNames.map(name => name.toLowerCase()));
+
 const instructions = [
-  "你是 Project Pulse 的项目助手。用大白话，首句直接回答问题。需要时再补至多两条关键信息或下一步，通常 150 字以内。省略客套、问题复述、统计口径和无关背景。",
+  "你是当前项目频道的助手。用大白话，首句直接回答问题。需要时再补至多两条关键信息或下一步，通常 150 字以内。省略客套、问题复述、统计口径和无关背景。",
   "语气像亲切、稍微俏皮的同事，偶尔用一句自然的口语。避免叠词、连续表情或每次都用同一句开场。讲到风险、受阻或验收时，直接把事实说清楚。",
   "项目事实优先使用顶部统计同源的数据 [1]；状态、完成数、参与者和数据时间以它为准。代码改动、历史讨论只用来补充背景。",
   "项目进度由负责人的客户端 Codex 自动上报到监控面板，Ember 展示上报结果。回答项目进度时不要求人在 Ember 确认或更新。不要把代码合并或阶段完成当成业务验收，不猜负责人、日期或结果。快照要注明日期。",
@@ -24,7 +28,7 @@ const terms = (text: string) => new Set([
 ]);
 
 export async function modelReply(data: PulseSnapshot, roomId: string, cookie: string, question: string, messageId?: string, conversation = "") {
-  if (data.project.key !== "jiawei-wang-dev/project-pulse") return null;
+  if (!modelProjects.has(data.project.key?.toLowerCase() ?? "")) return null;
   const deep = /^\s*(?:\/deep\b|深度分析[：:\s])/i.test(question);
   const provider = deep ? "GPT‑6.1 Sol" : "DeepSeek";
   let key: string;

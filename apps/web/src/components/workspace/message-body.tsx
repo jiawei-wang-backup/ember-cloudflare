@@ -24,6 +24,7 @@ interface Props {
   mentions: User[];
   /** Shows it large, as a message of nothing but emoji shows. */
   emoji?: boolean;
+  compactCardQuotes?: boolean;
   /** What follows the text: in its last paragraph, when it ends with one. */
   trailing?: ReactNode;
   className?: string;
@@ -33,12 +34,32 @@ interface Props {
  * A message's text, built from `displayBody`'s nodes rather than set as markup, with what a search's
  * results mark in it (`SearchMarks`) marked. `.message-content` in index.css styles it.
  */
-export function MessageBody({ nodes, mentions, emoji = false, trailing, className }: Props) {
+export function MessageBody({ nodes, mentions, emoji = false, compactCardQuotes = false, trailing, className }: Props) {
   const marks = useContext(SearchMarks);
   const matches = marks && matchesIn(nodes, marks);
   const last = nodes.at(-1);
   const inLastParagraph = trailing !== undefined && last?.kind === "element" && last.name === "p";
-  const children = nodes.map((node, index) => nodeOf(node, mentions, inLastParagraph && index === nodes.length - 1 ? trailing : undefined, false, matches));
+  const children: ReactNode[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!;
+    const cite = nodes[i + 1];
+    if (compactCardQuotes && node.kind === "element" && node.name === "blockquote" && cite?.kind === "element" && cite.name === "cite") {
+      const first = node.children[0];
+      const line = first?.kind === "element" && first.name === "p" ? first.children[0] : first;
+      const title = line?.kind === "text" && /^【(?:真实 PR|阶段证据|GitHub PR (?:同步|联调))】(.+)/.exec(line.value);
+      const link = cite.children.find(child => child.kind === "element" && child.name === "a");
+      if (title && link?.kind === "element" && link.attrs.href) {
+        const author = cite.children.filter(child => child.kind === "text").map(child => child.value).join("").trim();
+        children.push(<MessageLink href={link.attrs.href} className="project-quote-link">
+          {author && <span className="block text-xs text-message-muted">{author}</span>}
+          <span className="line-clamp-2">{title[1]}</span>
+        </MessageLink>);
+        i++;
+        continue;
+      }
+    }
+    children.push(nodeOf(node, mentions, inLastParagraph && i === nodes.length - 1 ? trailing : undefined, false, matches));
+  }
   if (trailing !== undefined && !inLastParagraph) children.push(trailing);
   return createElement("div", { dir: "auto", className: cn("message-content", emoji && "text-[2.4em] leading-[1.4]", className) }, ...children);
 }

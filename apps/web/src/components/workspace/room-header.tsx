@@ -13,7 +13,7 @@ import { AgentBadge, useIsWithAgent } from "./agent-badge";
 import { FavoriteButton } from "./favorite-button";
 import { HuddleButton } from "./huddle-button";
 import { NotificationBell } from "./notification-bell";
-import { HEADER_BUTTON, PageHeader } from "./page-header";
+import { HEADER_BUTTON, PageHeader, WorkspaceHeaderActions } from "./page-header";
 import { OpenSearchContext, opensSearch } from "./search-box";
 import { UserAvatar } from "./user-avatar";
 
@@ -25,6 +25,7 @@ interface Props {
   /** Its name as whoever's reading it reads it, which for a DM names the others in it. */
   name: string;
   present: User[];
+  viewerId?: User["id"];
   status: ConnectionStatus;
   /** Whether the room has been without a connection long enough to say so. */
   offline: boolean;
@@ -47,14 +48,17 @@ interface Props {
  * is then your notification level's, and its settings. A DM's has a chat bubble in place of the room's
  * icon, and no star or huddle button, and a DM with an AI agent alone the agent badge after its name.
  */
-export function RoomHeader({ room, name, present, status, offline, favorite, onStarred, involvement, askForRoom, onSessionChanged, onFailed, team }: Props) {
+export function RoomHeader({ room, name, present, viewerId, status, offline, favorite, onStarred, involvement, askForRoom, onSessionChanged, onFailed, team }: Props) {
   const nameOf = useNameOf();
   const isWithAgent = useIsWithAgent();
   const openSearch = useContext(OpenSearchContext);
+  const headerActions = useContext(WorkspaceHeaderActions);
+  const faces = headerActions ? present.filter(user => user.id !== viewerId) : present;
+  const bell = <NotificationBell room={room} involvement={involvement} askForRoom={askForRoom} onFailed={onFailed} className={cn(HEADER_BUTTON, "[&>svg]:size-5")} />;
   const direct = room.kind === "direct";
   const huddles = useAccount().huddles && !direct;
   return (
-    <PageHeader>
+    <PageHeader roomBell={bell}>
       <div className="flex min-w-0 flex-1 items-center gap-2.5 max-md:gap-[7px]">
         {direct ? (
           <ChatBubbleEmpty className="size-5 shrink-0" />
@@ -83,15 +87,15 @@ export function RoomHeader({ room, name, present, status, offline, favorite, onS
 
       {/* Up to 500px wide the faces would squeeze out the room's name, so there only screen readers hear
           who's here. */}
-      <div className="ml-auto flex shrink-0 items-center gap-1.5 upto-500px:sr-only" title={present.map(nameOf).join(", ")}>
-        <span className="sr-only">{present.length} here now</span>
+      {(!headerActions || faces.length > 0) && <div className="ml-auto flex shrink-0 items-center gap-1.5 upto-500px:sr-only" title={faces.map(nameOf).join(", ")}>
+        <span className="sr-only">{faces.length} here now</span>
         <div className="flex -space-x-1.5" aria-hidden="true">
-          {present.slice(0, MAX_FACES).map((user) => (
+          {faces.slice(0, MAX_FACES).map((user) => (
             <UserAvatar key={user.id} user={user} className="size-7 ring-2 ring-background" />
           ))}
         </div>
-        {present.length > MAX_FACES && <span className="text-xs text-muted-foreground">+{present.length - MAX_FACES}</span>}
-      </div>
+        {faces.length > MAX_FACES && <span className="text-xs text-muted-foreground">+{faces.length - MAX_FACES}</span>}
+      </div>}
 
       {/* The room's actions, 6px apart, and touching at 900px and below. */}
       <div className="flex shrink-0 items-center gap-1.5 max-md:gap-0">
@@ -106,7 +110,7 @@ export function RoomHeader({ room, name, present, status, offline, favorite, onS
           <Search className="size-5" />
           <span className="sr-only">Search messages</span>
         </PageLink>
-        <NotificationBell room={room} involvement={involvement} askForRoom={askForRoom} onFailed={onFailed} className={cn(HEADER_BUTTON, "[&>svg]:size-5")} />
+        {!headerActions && bell}
         <PageLink href={roomSettingsPath(room.kind, room.id)} title="Conversation settings" className={HEADER_BUTTON}>
           <MoreHoriz className="size-5" />
           <span className="sr-only">Settings for this {direct ? "Ping" : "room"}</span>

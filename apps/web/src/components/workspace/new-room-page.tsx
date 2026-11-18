@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { NewRoom, Room, RoomIconName, User, UserId } from "@ember/protocol";
 import { useFlash } from "@/components/flash";
+import { useAccount } from "@/hooks/use-account";
 import { useMounted } from "@/hooks/use-mounted";
 import { navigate, newRoomPath, roomPath, type Access } from "@/hooks/use-route";
 import { useTitle } from "@/hooks/use-title";
@@ -14,7 +15,7 @@ import { UnsavedChanges } from "./unsaved-changes";
 const DEFAULT_ROOM_NAME = "New room";
 
 /** The Everyone switch moves between New room's two forms, keeping the draft. */
-const isNewRoomPath = (path: string) => path === newRoomPath("open") || path === newRoomPath("closed");
+const isNewRoomPath = (path: string) => path.split("?")[0] === newRoomPath("open") || path.split("?")[0] === newRoomPath("closed");
 
 interface Props {
   /** Which of the two forms the address shows: a room for everyone, or a private one. */
@@ -32,9 +33,12 @@ interface Props {
  * administrators can create rooms, anyone else is sent to workspace settings with an alert.
  */
 export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
-  useTitle("New chat room");
+  const param = new URLSearchParams(location.search).get("group");
+  const group = useAccount().name === "Project Pulse · 研发协作中心" && (param === "project" || param === "team") ? param : undefined;
+  const title = group === "project" ? "新建项目频道" : group === "team" ? "新建团队协作频道" : "New room";
+  useTitle(title);
   const [people, setPeople] = useState<User[] | null>(null);
-  const [name, setName] = useState(DEFAULT_ROOM_NAME);
+  const [name, setName] = useState(group ? "" : DEFAULT_ROOM_NAME);
   const [icon, setIcon] = useState<RoomIconName | null>(null);
   const [chosen, setChosen] = useState<ReadonlySet<UserId>>(new Set());
   const [saving, setSaving] = useState(false);
@@ -66,7 +70,7 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
   const send = () => {
     // The private form lists its creator with a check mark and sends them as one of its members.
     const room: NewRoom = access === "open" ? { kind: access, name, icon: icon ?? "" } : { kind: access, name, icon: icon ?? "", memberIds: [me.id, ...chosen] };
-    return createRoom(room).then((room) => {
+    return createRoom(group ? {...room, channelGroup: group} : room).then((room) => {
       onCreated(room);
       setCreated(room);
       return room;
@@ -93,12 +97,12 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
 
   // Anything filled in, or the other form, which the page didn't open on, until the room's made.
   const changed =
-    people !== null && !saving && !created && (name !== DEFAULT_ROOM_NAME || icon !== null || access !== opened || (access === "closed" && chosen.size > 0));
+    people !== null && !saving && !created && (name !== (group ? "" : DEFAULT_ROOM_NAME) || icon !== null || access !== opened || (access === "closed" && chosen.size > 0));
   return (
     // Go Back returns to Rooms and permissions.
     <SettingsPage back={workspaceSectionPath("channel-settings")}>
       <Panel aria-busy={people === null}>
-        <PageHeading title="New room">Create a place for a team, topic, or project.</PageHeading>
+        <PageHeading title={title}>{group ? undefined : "Create a place for a team, topic, or project."}</PageHeading>
         {people && (
           <RoomForm
             canAdminister
@@ -106,7 +110,7 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
             onNameChange={setName}
             icon={icon}
             onIconChange={setIcon}
-            everyone={{ on: access === "open", onFlip: () => navigate(newRoomPath(access === "open" ? "closed" : "open"), { replace: true }) }}
+            everyone={{ on: access === "open", onFlip: () => navigate(newRoomPath(access === "open" ? "closed" : "open") + (group ? `?group=${group}` : ""), { replace: true }) }}
             groups={[people]}
             mark={(person) =>
               access === "open" || person.id === me.id ? (

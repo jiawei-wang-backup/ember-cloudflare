@@ -1309,6 +1309,7 @@ function navigationIconsIn(settings: Record<string, unknown> | null): Navigation
 }
 
 interface RoomToChangeRow extends SharedRoom {
+  channel_group: SharedRoom["channelGroup"] | null;
   can_administer: number;
 }
 
@@ -1320,6 +1321,7 @@ interface HuddleRow {
 
 /** A room someone is in, as `ROOMS_FOR_USER` reads it: a DM's name and icon are null. */
 interface SidebarRow extends HuddleRow {
+  channel_group: SharedRoom["channelGroup"] | null;
   id: RoomId;
   kind: SidebarRoom["kind"];
   name: string | null;
@@ -1368,8 +1370,8 @@ const isRanked = (rows: unknown[]) => (rows as Array<{ ranked: number }>)[0]?.ra
 const membersOf = (rows: DirectMemberRow[]): User[] => rows.map(({ id, name }) => ({ id, name }));
 
 /** A room someone is in, with the people in it if it's a DM, whom `members` reads. */
-const roomOf = ({ id, kind, name, icon, active_at }: SidebarRow, members: DirectMemberRow[] = []): Room =>
-  kind === "direct" ? { id, kind, members: membersOf(members), activeAt: active_at } : { id, kind, name: name ?? "", icon };
+const roomOf = ({ id, kind, name, icon, active_at, channel_group }: SidebarRow, members: DirectMemberRow[] = []): Room =>
+  kind === "direct" ? { id, kind, members: membersOf(members), activeAt: active_at } : { id, kind, name: name ?? "", icon, ...(channel_group && {channelGroup: channel_group}) };
 
 /** A room as someone's sidebar lists it, with whether it's marked unread for them, since when, and their level in it. */
 const sidebarRoom = (row: SidebarRow, members?: DirectMemberRow[]): SidebarRoom => ({
@@ -1379,7 +1381,7 @@ const sidebarRoom = (row: SidebarRow, members?: DirectMemberRow[]): SidebarRoom 
   involvement: row.involvement,
 });
 
-const roomToChange = (row: RoomToChangeRow) => ({ room: { id: row.id, kind: row.kind, name: row.name, icon: row.icon }, canAdminister: row.can_administer === 1 });
+const roomToChange = (row: RoomToChangeRow) => ({ room: { id: row.id, kind: row.kind, name: row.name, icon: row.icon, ...(row.channel_group && {channelGroup: row.channel_group}) }, canAdminister: row.can_administer === 1 });
 
 const storedSession = (row: SessionRow): StoredSession => ({
   id: row.session_id,
@@ -1401,7 +1403,7 @@ const ACTIVE_AT = `coalesce(rooms.last_message_at, rooms.created_at) AS active_a
  * joins is put in every open room, go in the order they were made, and rooms from before the Workspace
  * kept a list (`LEGACY_ROOMS`), whose ids don't sort by time, by when they were listed.
  */
-export const ROOMS_FOR_USER = `SELECT rooms.id, rooms.kind, rooms.name, rooms.icon, ${ACTIVE_AT}, memberships.unread_at IS NOT NULL AS unread,
+export const ROOMS_FOR_USER = `SELECT rooms.id, rooms.kind, rooms.name, rooms.icon, rooms.channel_group, ${ACTIVE_AT}, memberships.unread_at IS NOT NULL AS unread,
     memberships.unread_at AS unread_since, memberships.involvement, rooms.shared_position, rooms.huddle_started_at, rooms.huddle_user_ids
   FROM memberships JOIN rooms ON rooms.id = memberships.room_id
   WHERE memberships.user_id = ? ORDER BY memberships.created_at, rooms.created_at, rooms.id`;
@@ -2343,7 +2345,7 @@ const PRIORITIZED_MENTIONABLE_MEMBERS = MENTIONABLE_MEMBERS.replace(
 const CAN_ADMINISTER = `(users.role = ${ADMINISTRATOR} OR rooms.creator_id = users.id) AS can_administer`;
 
 /** A room someone is in, unless it's a DM, and whether they can change it. */
-export const ROOM_TO_CHANGE = `SELECT rooms.id, rooms.kind, rooms.name, rooms.icon, ${CAN_ADMINISTER}
+export const ROOM_TO_CHANGE = `SELECT rooms.id, rooms.kind, rooms.name, rooms.icon, rooms.channel_group, ${CAN_ADMINISTER}
   FROM memberships JOIN rooms ON rooms.id = memberships.room_id JOIN users ON users.id = memberships.user_id
   WHERE memberships.room_id = ? AND memberships.user_id = ? AND rooms.kind <> 'direct'`;
 
@@ -4546,11 +4548,12 @@ export class WorkspaceStore {
   async createRoom(room: SharedRoom, creatorId: UserId, memberIds: UserId[] | null, now: string): Promise<UserId[]> {
     const [, members] = (await this.db.batch([
       statement(
-        `INSERT INTO rooms (id, kind, name, icon, creator_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO rooms (id, kind, name, icon, channel_group, creator_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         room.id,
         room.kind,
         room.name,
         room.icon,
+        room.channelGroup ?? null,
         creatorId,
         now,
         now,

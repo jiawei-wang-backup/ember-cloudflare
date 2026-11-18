@@ -40,7 +40,7 @@ export function ProjectQuickLook({data, onDiscussion}: {data: PulseSnapshot; onD
     <section aria-label="项目速览" className="rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-base font-semibold">项目速览</h2>
-        <PulseStatusBadge value={data.project.status}/>
+        {["on_track", "blocked", "paused", "completed"].includes(data.project.status) && <PulseStatusBadge value={data.project.status}/>}
       </div>
       <dl className="mt-3 grid gap-x-6 gap-y-3 text-sm leading-relaxed sm:grid-cols-2">
         <div>

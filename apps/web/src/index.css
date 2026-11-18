@@ -712,3 +712,16 @@
     }
   }
 }
+
+.message-content a.project-quote-link {
+  display: block;
+  max-width: 48ch;
+  margin-block: .15rem .4rem;
+  padding: .35rem .65rem;
+  border-radius: .45rem;
+  background: color-mix(in srgb, var(--background) 55%, transparent);
+  color: var(--message-ink);
+  font-size: .875rem;
+  text-decoration: none;
+}
+.message-content a.project-quote-link:hover { text-decoration: underline; }

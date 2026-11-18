@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { SettingsLayout, SettingsNavigation } from "./settings-navigation";
 
 /** Whether the drawer is open, which the header's button for it says in its name. */
+export const WorkspaceHeaderActions = createContext<((roomBell?: ReactNode) => ReactNode) | null>(null);
 export const DrawerOpen = createContext(false);
 
 /**
@@ -16,7 +17,8 @@ export const DrawerOpen = createContext(false);
  * drawer holds only the rail, so its button opens and closes the navigation. The links come after the
  * bar rather than after the page, so Tab reaches them in the order they're seen.
  */
-export function PageHeader({ children }: { children?: ReactNode }) {
+export function PageHeader({ children, roomBell }: { children?: ReactNode; roomBell?: ReactNode }) {
+  const headerActions = useContext(WorkspaceHeaderActions);
   const drawerOpen = useContext(DrawerOpen);
   const settings = useContext(SettingsLayout);
   const drawer = settings ? "navigation" : "conversations";
@@ -40,6 +42,7 @@ export function PageHeader({ children }: { children?: ReactNode }) {
         </SheetTrigger>
         {children}
         {settings && <h1 className="min-w-0 flex-1 text-[17px] leading-[1.4] font-[650] max-md:text-base">Community settings</h1>}
+        {headerActions?.(roomBell)}
       </nav>
       {settings && <SettingsNavigation {...settings} />}
     </>

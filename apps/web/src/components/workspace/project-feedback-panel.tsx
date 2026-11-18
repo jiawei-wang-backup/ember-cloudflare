@@ -4,6 +4,8 @@ import {Dialog, DialogContent, DialogTitle, DialogDescription} from "@/component
 import {PageLink} from "@/components/page-link";
 import {clientId} from "@/lib/client-id";
 
+import {FeedbackMessagePicker} from "./feedback-message-picker";
+
 const button = "rounded-md border bg-card px-3 py-1.5 text-xs hover:bg-hover disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring";
 const field = "min-w-0 rounded-md border bg-card px-2 py-2 text-sm";
 const statusGroups: {label: string; statuses: FeedbackStatus[]}[] = [
@@ -34,7 +36,7 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return value as T;
 }
 export function FeedbackBadge({item}: {item: ProjectFeedback}) {
-  return <span className="inline-flex shrink-0 items-center gap-1 rounded-full border bg-hover px-2 py-0.5 text-[11px]">{feedbackStatuses[item.status]}{item.demo && <span className="text-muted-foreground">· 流程演示</span>}</span>;
+  return <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-message-muted"><span aria-hidden="true" className={`size-1.5 rounded-full ${item.status === "blocked" ? "bg-negative" : item.status === "awaiting_acceptance" ? "bg-warning" : "bg-muted-foreground/60"}`}/>{feedbackStatuses[item.status]}{item.demo && <span className="text-muted-foreground">· 演示</span>}</span>;
 }
 export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, focusId}: Props) {
   const base = `/api/rooms/${roomId}/project/feedback`;
@@ -47,6 +49,7 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
   const [moduleId, setModuleId] = useState(data.business?.modules[0]?.id || ""), [milestoneId, setMilestoneId] = useState("");
   const [operation, setOperation] = useState<FeedbackAction | null>(null), [note, setNote] = useState("");
   const [assigneeId, setAssigneeId] = useState(""), [dueOn, setDueOn] = useState(""), [criteria, setCriteria] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [evidence, setEvidence] = useState<FeedbackEvidence[]>([{label: "", url: ""}]);
   const [saving, setSaving] = useState(false), [notice, setNotice] = useState("");
   const request = useRef<string | null>(null);
@@ -73,7 +76,7 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
   const begin = (action: FeedbackAction) => {
     if (!detail) return;
     operationVersion.current = detail.item.version;
-    setOperation(action); setModuleId(detail.item.moduleId); setMilestoneId(detail.item.milestoneId || ""); setAssigneeId(detail.item.assignee?.id || ""); setDueOn(detail.item.dueOn || ""); setCriteria(detail.item.criteria); setNote(""); setEvidence([{label: "", url: ""}]); change();
+    setPickerOpen(false); setOperation(action); setModuleId(detail.item.moduleId); setMilestoneId(detail.item.milestoneId || ""); setAssigneeId(detail.item.assignee?.id || ""); setDueOn(detail.item.dueOn || ""); setCriteria(detail.item.criteria); setNote(""); setEvidence([{label: "", url: ""}]); change();
   };
   const create = async () => {
     setSaving(true); setError(""); request.current ??= clientId();
@@ -110,18 +113,17 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
   const visibleItems = page?.items.filter(item => !filter || filter.statuses.includes(item.status))
     .sort((a, b) => feedbackPriority[a.status] - feedbackPriority[b.status]) ?? [];
   return <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 max-md:px-3 max-md:py-3" aria-label="反馈与落实工作台">
-    <div className="mx-auto max-w-5xl space-y-4">
-      <header className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">反馈与落实</h2></div><div className="flex gap-2"><button className={button} onClick={() => setRevision(n => n + 1)}>刷新反馈</button><button className={button} onClick={() => {setCreateOpen(true); setModuleId(data.business?.modules[0]?.id || ""); setMilestoneId(""); setTitle(""); setDescription(""); change();}}>提出反馈</button></div></header>
+    <div className="mx-auto max-w-3xl space-y-4">
+      <header className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">反馈与落实</h2></div><div className="flex gap-2"><button className={button} onClick={() => setRevision(n => n + 1)}>刷新</button><button className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground" onClick={() => {setCreateOpen(true); setModuleId(data.business?.modules[0]?.id || ""); setMilestoneId(""); setTitle(""); setDescription(""); change();}}>提出反馈</button></div></header>
 
       <div role="group" aria-label="按状态筛选" className="flex flex-wrap gap-2">
-        {statusGroups.map(group => <button key={group.label} className={`${button} ${filter === group ? "ring-1 ring-ring" : ""}`} aria-pressed={filter === group} onClick={() => setFilter(current => current === group ? null : group)}>{group.label}</button>)}
+        {statusGroups.map(group => <button key={group.label} className={`rounded-md px-2.5 py-1.5 text-xs hover:bg-hover ${filter === group ? "bg-hover font-semibold" : "text-message-muted"}`} aria-pressed={filter === group} onClick={() => setFilter(current => current === group ? null : group)}>{group.label}</button>)}
       </div>
       {notice && <p role="status" className="text-xs text-message-muted">{notice}</p>}{error && <p role="alert" className="text-xs text-negative">{error}</p>}
-      {loading && <p className="text-xs text-muted-foreground">正在读取反馈…</p>}
-      <div className="space-y-2">
-        {visibleItems.map(item => <button className="block w-full rounded-xl border bg-card p-4 text-left hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring" key={item.id} onClick={() => {setActive(item.id); setDetail(null); setError("");}}>
-          <div className="flex flex-wrap items-start justify-between gap-2"><h3 className="text-sm font-medium">{item.title}</h3><FeedbackBadge item={item}/></div>
-          <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-message-muted">{item.description}</p>
+      {loading && !page && <p className="text-xs text-muted-foreground">正在读取反馈…</p>}
+      <div className="divide-y border-y empty:hidden">
+        {visibleItems.map(item => <button className="block w-full px-2 py-3 text-left hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring" key={item.id} onClick={() => {setActive(item.id); setDetail(null); setError("");}}>
+          <div className="flex flex-wrap items-start justify-between gap-2"><h3 className="min-w-0 flex-1 wrap-anywhere text-sm font-medium">{item.title}</h3><FeedbackBadge item={item}/></div>
           {nextStep[item.status] ? <p className="mt-2 text-xs text-muted-foreground">
             {item.assignee ? `执行人 ${item.assignee.name}` : "待分派"} · {nextStep[item.status]}{item.dueOn && ` · ${item.dueOn}`}
           </p> : item.assignee && <p className="mt-2 text-xs text-muted-foreground">执行人 {item.assignee.name}</p>}
@@ -133,17 +135,19 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
     <Dialog open={active !== null} onOpenChange={open => {if (!open && !saving) {setActive(null); setOperation(null); setError("");}}}><DialogContent className="flex max-h-[88dvh] flex-col overflow-y-auto sm:max-w-2xl"><DialogTitle className="pr-5">{detail?.item.title || "反馈详情"}</DialogTitle><DialogDescription className="sr-only">反馈详情与操作记录</DialogDescription>{detail && <>
       <div className="flex flex-wrap items-center gap-2"><FeedbackBadge item={detail.item}/><span className="text-[11px] text-muted-foreground">提出人：{detail.item.createdBy.name} · {new Date(detail.item.createdAt).toLocaleString("zh-CN")}</span></div>
       <p className="text-xs text-message-muted">{data.business?.modules.find(m => m.id === detail.item.moduleId)?.name} · {data.business?.journeys?.find(j => j.id === detail.item.milestoneId)?.title || data.business?.modules.flatMap(m => m.milestones).find(m => m.id === detail.item.milestoneId)?.title || "整个模块"}</p>
-      <details><summary className="cursor-pointer text-xs font-medium">反馈内容与方案</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed">{detail.item.description}</p></details>
-      <dl className="grid gap-2 rounded-lg border bg-surface p-3 text-xs"><div>执行人：{detail.item.assignee?.name || "待安排"}</div><div>约定日期：{detail.item.dueOn || "未约定"}</div><div className="whitespace-pre-wrap">验收条件：{detail.item.criteria || "待明确"}</div></dl>
+      <p className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed">{detail.item.description}</p>
+      <details><summary className="cursor-pointer text-sm font-medium">执行安排</summary><div className="mt-2 grid gap-2 text-sm text-message-muted"><div>执行人：{detail.item.assignee?.name || "待安排"}</div><div>约定日期：{detail.item.dueOn || "未约定"}</div><div className="whitespace-pre-wrap">验收条件：{detail.item.criteria || "待明确"}</div></div></details>
       <div className="space-y-1 text-xs">{detail.item.sourceMessageIds.map((id, index) => {const source = detail.sources?.find(s => s.id === id); return source?.path ? <PageLink key={id} className="mr-3 text-link underline" href={source.path}>原始讨论 {index + 1}</PageLink> : <span key={id} className="mr-3 text-muted-foreground">原始讨论 {index + 1} 已不可用</span>;})}{detail.item.proposalMessageId && <PageLink className="text-link underline" href={`/rooms/${roomId}/@${detail.item.proposalMessageId}`}>采纳方案</PageLink>}</div>
-      <div><h3 className="mb-1 text-xs font-semibold">交付依据</h3>{detail.item.evidence.length ? detail.item.evidence.map((e, i) => <a key={i} className="mr-3 block break-all text-xs text-link underline" href={e.url} target="_blank" rel="noreferrer">{e.label}</a>) : <p className="text-xs text-muted-foreground">暂无交付依据</p>}</div>
+      {detail.item.evidence.length > 0 && <div><h3 className="mb-1 text-xs font-semibold">交付依据</h3>{detail.item.evidence.map((e, i) => <a key={i} className="mr-3 block break-all text-xs text-link underline" href={e.url} target="_blank" rel="noreferrer">{e.label}</a>)}</div>}
       <div className="flex flex-wrap gap-2">{allowed(detail.item).map(action => <button key={action} className={button} onClick={() => begin(action)}>{actions[action]}</button>)}</div>
       <details><summary className="cursor-pointer text-xs font-semibold">操作与验收记录（{detail.events.length}）</summary><ol className="mt-2 space-y-3 border-l pl-3">{detail.events.map(event => <li key={event.id} className="text-xs"><p><strong>{event.actor.name}</strong> · {event.from ? `${feedbackStatuses[event.from]} → ` : ""}{feedbackStatuses[event.to]}</p><p className="mt-1 whitespace-pre-wrap text-message-muted">{event.note}</p><time className="text-[10px] text-muted-foreground">{new Date(event.at).toLocaleString("zh-CN")}</time></li>)}</ol></details>
     </>}</DialogContent></Dialog>
     <Dialog open={createOpen} onOpenChange={open => {if (!saving) setCreateOpen(open);}}><DialogContent className="max-h-[88dvh] overflow-y-auto sm:max-w-xl"><DialogTitle>提出项目反馈</DialogTitle><DialogDescription className="sr-only">填写项目反馈</DialogDescription>{moduleFields}<label className="flex flex-col gap-1 text-xs">反馈标题<input className={field} maxLength={160} value={title} onChange={e => {setTitle(e.target.value); change();}}/></label><label className="flex flex-col gap-1 text-xs">问题与期望<textarea className={`${field} min-h-28`} maxLength={6000} value={description} onChange={e => {setDescription(e.target.value); change();}} placeholder="在哪个场景遇到什么问题？希望怎么改？能提供什么信息？"/></label>{error && <p role="alert" className="text-xs text-negative">{error}</p>}<button className={button} disabled={saving || !title.trim() || !description.trim()} onClick={() => void create()}>{saving ? "正在提交…" : "提交反馈"}</button></DialogContent></Dialog>
     <Dialog open={operation !== null} onOpenChange={open => {if (!open && !saving) {setOperation(null); setError("");}}}><DialogContent className="max-h-[88dvh] overflow-y-auto sm:max-w-xl"><DialogTitle>{operation ? actions[operation] : "更新反馈"}</DialogTitle><DialogDescription className="sr-only">记录执行安排与交付结果</DialogDescription>
       {operation && ["adopt", "assign"].includes(operation) && <>{moduleFields}<label className="flex flex-col gap-1 text-xs">执行人<select aria-label="反馈执行人" className={field} value={assigneeId} onChange={e => {setAssigneeId(e.target.value); change();}}><option value="">请选择执行人</option>{data.team?.members.filter(m => !m.bot).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label className="flex flex-col gap-1 text-xs">约定日期（可选）<input type="date" className={field} value={dueOn} onChange={e => {setDueOn(e.target.value); change();}}/></label><label className="flex flex-col gap-1 text-xs">验收条件<textarea className={`${field} min-h-20`} maxLength={4000} value={criteria} onChange={e => {setCriteria(e.target.value); change();}} placeholder="明确怎样才算解决，谁提供哪些样本或验证依据。"/></label></>}
-      {operation === "deliver" && <div className="space-y-2"><p className="text-xs font-medium">产出或验证记录（至少一条）</p>{evidence.map((entry, index) => <div key={index} className="grid gap-2"><input aria-label={`证据名称 ${index + 1}`} className={field} placeholder="PR、交付文档或验证记录的名称" maxLength={160} value={entry.label} onChange={e => {setEvidence(previous => previous.map((old, i) => i === index ? {...old, label: e.target.value} : old)); change();}}/><input aria-label={`证据链接 ${index + 1}`} className={field} placeholder="https://… 或本项目讨论链接" maxLength={2000} value={entry.url} onChange={e => {setEvidence(previous => previous.map((old, i) => i === index ? {...old, url: e.target.value} : old)); change();}}/></div>)}{evidence.length < 10 && <button className={button} onClick={() => setEvidence(previous => [...previous, {label: "", url: ""}])}>添加一条交付依据</button>}</div>}
+      {operation === "deliver" && <div className="space-y-2"><p className="text-xs font-medium">产出或验证记录（至少一条）</p>{pickerOpen ? <FeedbackMessagePicker roomId={roomId} members={data.team?.members ?? []} existing={evidence} onClose={() => setPickerOpen(false)} onAdd={items => {
+        setEvidence(prev => [...prev.filter(e => e.label.trim() || e.url.trim()), ...items]); setPickerOpen(false); change();
+      }}/> : <button type="button" className={button} disabled={evidence.filter(e => e.label.trim() || e.url.trim()).length >= 10} onClick={() => setPickerOpen(true)}>从聊天记录选择</button>}{evidence.map((entry, index) => <div key={index} className="grid gap-2"><input aria-label={`证据名称 ${index + 1}`} className={field} placeholder="PR、交付文档或验证记录的名称" maxLength={160} value={entry.label} onChange={e => {setEvidence(previous => previous.map((old, i) => i === index ? {...old, label: e.target.value} : old)); change();}}/><input aria-label={`证据链接 ${index + 1}`} className={field} placeholder="https://… 或本项目讨论链接" maxLength={2000} value={entry.url} onChange={e => {setEvidence(previous => previous.map((old, i) => i === index ? {...old, url: e.target.value} : old)); change();}}/>{evidence.length > 1 && <button type="button" className="justify-self-end text-xs text-message-muted" onClick={() => {setEvidence(prev => prev.filter((_, i) => i !== index)); change();}}>移除依据</button>}</div>)}{evidence.length < 10 && <button className={button} onClick={() => setEvidence(previous => [...previous, {label: "", url: ""}])}>添加一条交付依据</button>}</div>}
       <label className="flex flex-col gap-1 text-xs">本次操作说明<textarea className={`${field} min-h-20`} maxLength={4000} value={note} onChange={e => {setNote(e.target.value); change();}} placeholder={operation === "accept" ? "实际检查了哪些条件？结果与证据是什么？" : "说明本次安排、卡点、交付范围或补充信息。"}/></label>{error && <p role="alert" className="text-xs text-negative">{error}</p>}<button className={button} disabled={saving || !note.trim()} onClick={() => void update()}>{saving ? "正在保存…" : "确认并记录"}</button>
     </DialogContent></Dialog>
   </div>;

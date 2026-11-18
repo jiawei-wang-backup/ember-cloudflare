@@ -230,6 +230,7 @@ export type RoomIconChoice = RoomIconName | "";
 
 /** An open or a private room, which Campfire calls a shared room (users/sidebars/rooms/_shared.html.erb). */
 export interface SharedRoom {
+  channelGroup?: "project" | "team";
   id: RoomId;
   kind: Exclude<RoomKind, "direct">;
   name: string;
@@ -330,7 +331,7 @@ export const suggestedCount = (peopleInDirects: number) => Math.max(0, SUGGESTED
  * A room to create: an open room takes in everyone, and a closed one only the people `memberIds` names.
  * Without an icon, it has the default `#`.
  */
-export type NewRoom = { name: string; icon?: RoomIconChoice } & ({ kind: "open" } | { kind: "closed"; memberIds: UserId[] });
+export type NewRoom = { channelGroup?: SharedRoom["channelGroup"]; name: string; icon?: RoomIconChoice } & ({ kind: "open" } | { kind: "closed"; memberIds: UserId[] });
 
 /** Someone active, as a room's settings list them, with whether they're in the room. */
 export interface RoomPerson extends User {
@@ -2020,9 +2021,11 @@ export function parseNewRoom(data: unknown): NewRoom | string {
   if (!name) return `Name must be 1 to ${MAX_ROOM_NAME_LENGTH} characters`;
   const icon = iconChoice(r.icon);
   if (icon === null) return ICON_REFUSED;
-  if (r.kind === "open") return { kind: r.kind, name, icon };
+  if (r.channelGroup !== undefined && r.channelGroup !== "project" && r.channelGroup !== "team") return "Invalid channel group";
+  const group = r.channelGroup ? {channelGroup: r.channelGroup} as Pick<SharedRoom, "channelGroup"> : {};
+  if (r.kind === "open") return { ...group, kind: r.kind, name, icon };
   const memberIds = r.memberIds ?? [];
-  return userIds(memberIds) ? { kind: r.kind, name, icon, memberIds } : `Members must be a list of at most ${MAX_LISTED_USERS} user ids`;
+  return userIds(memberIds) ? { ...group, kind: r.kind, name, icon, memberIds } : `Members must be a list of at most ${MAX_LISTED_USERS} user ids`;
 }
 
 /**

@@ -3151,7 +3151,7 @@ export class Workspace extends DurableObject<Env> {
     const user = await this.authenticate(credentials);
     if (!user) return null;
     if (!(await this.mayCreateRoomsAs(user.id))) return "forbidden";
-    const created: SharedRoom = { id: sortableId(), kind: room.kind, name: room.name, icon: room.icon || null };
+    const created: SharedRoom = { id: sortableId(), kind: room.kind, name: room.name, icon: room.icon || null, ...(room.channelGroup && {channelGroup: room.channelGroup}) };
     const memberIds = await this.store.createRoom(created, user.id, room.kind === "closed" ? room.memberIds : null, new Date().toISOString());
     this.tell(memberIds, { type: "room.saved", room: created });
     return created;

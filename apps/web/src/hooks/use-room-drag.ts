@@ -41,6 +41,7 @@ interface Options {
   groupOf?: (roomId: RoomId) => string | undefined;
   /** How long a row is held before it's dragged, or 0 to drag it at once. */
   holdMs: number;
+  dragOnPointerMove?: boolean;
   /** Whether a press on `target` picks up the row it's in. Anywhere in the row does, unless this says otherwise. */
   grabs?: (target: Element) => boolean;
   /** Whether the rows stay where they are for now, as while an order saves. */
@@ -69,7 +70,7 @@ const anywhere = () => true;
  * The list's element takes `listRef` and `listProps`, its rows carry `data-room-id`, and the element the
  * list scrolls in takes `scrollerRef`, unless that's the list itself.
  */
-export function useRoomDrag({ order, movable, groupOf, holdMs, grabs = anywhere, isLocked, onDrag, onMove, onCancel }: Options) {
+export function useRoomDrag({ order, movable, groupOf, holdMs, dragOnPointerMove, grabs = anywhere, isLocked, onDrag, onMove, onCancel }: Options) {
   const listRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<RoomId[] | null>(null);
@@ -132,8 +133,11 @@ export function useRoomDrag({ order, movable, groupOf, holdMs, grabs = anywhere,
     const pressed = press.current;
     if (!pressed) return;
     if (!pressed.dragging) {
-      if (Math.hypot(point.clientX - pressed.x, point.clientY - pressed.y) > STILL_PX) cancel();
-      return;
+      if (Math.hypot(point.clientX - pressed.x, point.clientY - pressed.y) <= STILL_PX) return;
+      if (!dragOnPointerMove || pressed.kind !== "pointer") return cancel();
+      clearTimeout(hold.current);
+      begin();
+      if (!pressed.dragging) return;
     }
     pressed.lastY = point.clientY;
     // The row goes before the first other one that can move whose middle is below the pointer, or after
