@@ -3316,8 +3316,30 @@ export class Workspace extends DurableObject<Env> {
     const user = await this.authenticate(credentials);
     if (!user) return null;
     if (!(await this.mayCreateRoomsAs(user.id))) return "forbidden";
+    return this.saveNewRoom(user.id, room);
+  }
+
+  /** Creates the private channel for a repository, serializing concurrent onboarding attempts. */
+  async outsideProjectChannel(access: OutsideAccess, repository: string): Promise<SharedRoom | "forbidden" | "ambiguous"> {
+    return this.oneAtATime(async () => {
+      const {userId, connectionId} = access;
+      if (!access.scopes.includes("create_project_channels") || !access.scopes.includes("private") ||
+          !(await this.outsideAi()) || !(await this.mayCreateRoomsAs(userId))) return "forbidden";
+      const connections = await this.outside.connectionsOf(userId, new Date().toISOString());
+      if (!connections.some(connection => connection.id === connectionId)) return "forbidden";
+      const name = `项目 · ${repository}`;
+      const existing = (await this.store.roomsFor(userId)).rooms.filter(room =>
+        room.kind === "closed" && room.channelGroup === "project" && room.name.toLowerCase() === name.toLowerCase());
+      if (existing.length > 1) return "ambiguous";
+      const room = existing[0];
+      if (room?.kind === "closed") return {id: room.id, kind: room.kind, name: room.name, icon: room.icon, channelGroup: "project"};
+      return this.saveNewRoom(userId, {kind: "closed", name, channelGroup: "project", memberIds: [userId]});
+    });
+  }
+
+  private async saveNewRoom(creatorId: UserId, room: NewRoom): Promise<SharedRoom> {
     const created: SharedRoom = { id: sortableId(), kind: room.kind, name: room.name, icon: room.icon || null, ...(room.channelGroup && {channelGroup: room.channelGroup}) };
-    const memberIds = await this.store.createRoom(created, user.id, room.kind === "closed" ? room.memberIds : null, new Date().toISOString());
+    const memberIds = await this.store.createRoom(created, creatorId, room.kind === "closed" ? room.memberIds : null, new Date().toISOString());
     this.tell(memberIds, { type: "room.saved", room: created });
     return created;
   }

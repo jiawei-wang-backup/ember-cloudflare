@@ -24,7 +24,7 @@ export const NOTHING_CONNECTED = "No AI app is connected as you.";
  * asked Ember anything, if it has.
  */
 export function connectionStatus({ comesBackTo, connectedAt, usedAt, scopes }: OutsideConnection): string {
-  const allowed = `${scopes.includes("write") ? " It can send messages as you." : ""}${scopes.includes("private") ? " It can use your direct messages and private rooms too." : ""}`;
+  const allowed = `${scopes.includes("write") ? " It can send messages as you." : ""}${scopes.includes("private") ? " It can use your direct messages and private rooms too." : ""}${scopes.includes("create_project_channels") ? " It can create private project channels as you." : ""}`;
   const connected = `From ${comesBackTo}, connected ${dateTimeLabel(new Date(connectedAt))}.${allowed}`;
   return usedAt === null ? `${connected} It hasn't asked Ember anything yet.` : `${connected} It last asked Ember something ${dateTimeLabel(new Date(usedAt))}.`;
 }

@@ -277,13 +277,13 @@ describe("Outside AI", () => {
     await setUpOn();
     const unsigned = await asked(null, "tools/list");
     expect(unsigned.status).toBe(401);
-    expect(unsigned.challenge).toBe(`Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", scope="read write private"`);
+    expect(unsigned.challenge).toBe(`Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", scope="read write private create_project_channels"`);
     expect((await asked("not-a-token", "tools/list")).challenge).toContain('error="invalid_token"');
 
     for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
       const resource = await api(path);
       expect(resource.headers.get("Access-Control-Allow-Origin")).toBe("*");
-      expect(await resource.json()).toEqual({ resource: MCP, authorization_servers: [origin], scopes_supported: ["read", "write", "private"], bearer_methods_supported: ["header"], resource_name: "Ember" });
+      expect(await resource.json()).toEqual({ resource: MCP, authorization_servers: [origin], scopes_supported: ["read", "write", "private", "create_project_channels"], bearer_methods_supported: ["header"], resource_name: "Ember" });
     }
     expect(await (await api("/.well-known/oauth-authorization-server")).json()).toMatchObject({
       issuer: origin,
@@ -1100,4 +1100,22 @@ describe("Where a connected AI app reaches", () => {
     expect((await connected(member, { scope: "read write" }, [], ["private"])).tokens.scope).toBe("read write");
     expect((await connected(member, { scope: "write private" }, [], ["private"])).tokens.scope).toBe("write private");
   });
+});
+
+
+it("creates a private project channel only with the granted scopes and reuses it", async () => {
+  const { member, administrator } = await setUpOn();
+  const scope = "read write private create_project_channels";
+  const rejected = (await connected(member, {scope}, [], ["create_project_channels"])).tokens.access_token;
+  const params = {repository: "example/MonashMate"};
+  expect((await called(rejected, "create_project_channel", params)).isError).toBe(true);
+  const allowed = (await connected(member, {scope}, [], ["private", "create_project_channels"])).tokens.access_token;
+  const first = await called(allowed, "create_project_channel", params);
+  expect(first.isError).toBeFalsy();
+  const {room} = JSON.parse(first.text);
+  expect(room).toMatchObject({kind: "closed", name: "项目 · example/monashmate"});
+  expect((await called(allowed, "create_project_channel", params)).text).toEqual(first.text);
+  const reader = (await connected(administrator, {scope: "read private"}, [], ["private"])).tokens.access_token;
+  expect((await roomsFor(reader)).some(({id}) => id === room.id)).toBe(false);
+  expect((await called(allowed, "send_message", {room_id: room.id, text: "已完成首次同步"})).isError).toBeFalsy();
 });

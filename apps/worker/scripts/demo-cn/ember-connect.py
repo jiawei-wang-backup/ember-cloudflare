@@ -55,7 +55,14 @@ def save(client, tokens):
     temporary.replace(CREDENTIALS)
 
 
-def connect(include_private=False, include_write=False):
+def connect(include_private=False, include_write=False, create_projects=False):
+    scopes = ["read"]
+    if include_write or create_projects:
+        scopes.append("write")
+    if include_private or create_projects:
+        scopes.append("private")
+    if create_projects:
+        scopes.append("create_project_channels")
     nonce = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
@@ -83,7 +90,7 @@ def connect(include_private=False, include_write=False):
                                              "redirect_uris": [redirect]})["client_id"]
         query = urlencode({"response_type": "code", "client_id": client, "redirect_uri": redirect,
                            "state": nonce, "code_challenge": challenge, "code_challenge_method": "S256",
-                           "scope": " ".join(["read"] + (["write"] if include_write else []) + (["private"] if include_private else [])),
+                           "scope": " ".join(scopes),
                            "resource": RESOURCE})
         print(ORIGIN + "/oauth/authorize?" + query, flush=True)
         deadline = time.monotonic() + 300
@@ -143,6 +150,7 @@ def main():
     parser.add_argument("mode", choices=["connect", "serve", "rooms"])
     parser.add_argument("--private", action="store_true", help="允许在网页上选择私聊和私有频道")
     parser.add_argument("--write", action="store_true", help="申请发布项目进展的权限")
+    parser.add_argument("--project-channels", action="store_true", help="申请创建私有项目频道并发布进展的权限")
     args = parser.parse_args()
     if args.mode == "serve":
         serve()
@@ -150,7 +158,7 @@ def main():
     if args.mode == "rooms":
         print(json.dumps(call_tool("list_rooms", {})))
         return
-    connect(args.private, args.write)
+    connect(args.private, args.write, args.project_channels)
     subprocess.run(["codex", "mcp", "add", "ember-cn", "--", sys.executable,
                     str(Path(__file__).resolve()), "serve"], check=True)
     print("Ember 网页授权已完成。重新打开 Codex 会话即可调用 ember-cn。")

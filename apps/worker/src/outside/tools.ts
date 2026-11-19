@@ -232,6 +232,22 @@ const SENDING: Tool[] = [
   },
 ];
 
+const CHANNEL_CREATION: Tool[] = [{
+  name: "create_project_channel",
+  title: "Create a private project channel",
+  description: "Creates the private project channel for a confirmed GitHub repository, or returns the matching private project channel you are already in. Only you are added to a new channel.",
+  takes: { repository: {type: "string", description: "The confirmed GitHub repository, owner/name."} },
+  required: ["repository"],
+  async run(env, access, {repository}) {
+    if (typeof repository !== "string" || repository.length > 95 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository))
+      throw new Refused("Give a confirmed GitHub repository as owner/name.");
+    const room = await workspace(env).outsideProjectChannel(access, repository.toLowerCase());
+    if (room === "forbidden") throw new Refused("Channel creation needs project channel and private room permissions, and permission to create rooms in Ember.");
+    if (room === "ambiguous") throw new Refused("More than one private project channel uses this repository name.");
+    return {room: shownRoom(room, access.userId)};
+  },
+}];
+
 /**
  * The tools each scope gives a connection, with what an app is told of them: one that asks its person
  * before changing anything goes by whether a tool only reads. "private" gives none, only more rooms for
@@ -240,6 +256,7 @@ const SENDING: Tool[] = [
 const TOOLS: Partial<Record<OutsideScope, { tools: Tool[]; annotations: { readOnlyHint: boolean; destructiveHint?: boolean; openWorldHint: boolean } }>> = {
   read: { tools: READING, annotations: { readOnlyHint: true, openWorldHint: false } },
   write: { tools: SENDING, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
+  create_project_channels: {tools: CHANNEL_CREATION, annotations: {readOnlyHint: false, destructiveHint: false, openWorldHint: false}},
 };
 
 /** What a tool answers an app: what it found, as JSON, or why it couldn't, as an error its model reads. */

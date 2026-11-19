@@ -17,20 +17,21 @@ export const OUTSIDE_AUTHORIZE_PATH = "/oauth/authorize";
  * open to everyone that they're in, and with "private", in their direct messages and private rooms too.
  * "private" gives no tools of its own, so a connection always has reading or sending besides.
  */
-export const OUTSIDE_SCOPES = ["read", "write", "private"] as const;
+export const OUTSIDE_SCOPES = ["read", "write", "private", "create_project_channels"] as const;
 export type OutsideScope = (typeof OUTSIDE_SCOPES)[number];
 
 /** What an app that asks for nothing by name is given: reading alone. */
 export const DEFAULT_OUTSIDE_SCOPES: readonly OutsideScope[] = ["read"];
 
 /** The scopes the page leaves unticked, which a connection has only when its person ticks them: their direct messages and private rooms. */
-export const UNTICKED_OUTSIDE_SCOPES: readonly OutsideScope[] = ["private"];
+export const UNTICKED_OUTSIDE_SCOPES: readonly OutsideScope[] = ["private", "create_project_channels"];
 
 /** What the page says each scope lets an app do, after "It will be able to". */
 export const OUTSIDE_SCOPE_EXPLAINED: Record<OutsideScope, string> = {
   read: "See the open rooms you're in, read their messages and search them, as you can",
   write: "Send messages as you, in the open rooms you're in",
   private: "Do the same in your direct messages and private rooms",
+  create_project_channels: "Create private project channels as you",
 };
 
 /** The scopes among `asked` that the page lets a person leave out: their direct messages and private rooms, and sending, when the app asks to read too. */
