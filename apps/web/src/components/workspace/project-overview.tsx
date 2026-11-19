@@ -94,22 +94,51 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
     setError(""); setLoading(true);
     const controller = new AbortController();
     let followup: ReturnType<typeof setTimeout> | undefined;
-    const load = (refresh: boolean, first = true) => fetch(`/api/rooms/${encodeURIComponent(roomId)}/project?days=${days}${refresh ? "&refresh=1" : ""}`, {signal: controller.signal, credentials: "same-origin", cache: "no-store"})
-      .then(async response => {
-        if (response.status === 404) return null;
-        if (!response.ok) throw new Error(response.status === 403 ? "没有此项目的数据权限" : "项目数据暂不可用");
+    let bound = false;
+    let pending = false;
+    const load = async (refresh: boolean, initial = false) => {
+      if (controller.signal.aborted || pending) return;
+      pending = true;
+      try {
+        const url = `/api/rooms/${encodeURIComponent(roomId)}/project?days=${days}${refresh ? "&refresh=1" : ""}`;
+        const response = await fetch(url, {signal: controller.signal, credentials: "same-origin", cache: "no-store"});
+        if (controller.signal.aborted) return;
+        if (response.status === 404 || response.status === 403) {
+          bound = false;
+          setData(null);
+          setError(response.status === 403 ? "没有此项目的数据权限" : "");
+          return;
+        }
+        if (!response.ok) throw new Error("项目数据暂不可用");
         const snapshot = await response.json() as PulseSnapshot | null;
         if (!snapshot?.project || !snapshot.usage || !Array.isArray(snapshot.members)) throw new Error("项目数据格式有误");
-        return snapshot;
-      }).then(value => {
         if (controller.signal.aborted) return;
-        setData(value);
-        if (first && value?.business && value.freshness?.status === "snapshot") followup = setTimeout(() => {if (!document.hidden) void load(false, false);}, 9_000);
-      })
-      .catch(cause => {if (!controller.signal.aborted) {setData(null); setError(cause.message);}})
-      .finally(() => {if (!controller.signal.aborted) setLoading(false);});
-    void load(revision > 0);
-    return () => {controller.abort(); clearTimeout(followup);};
+        bound = true;
+        setData(snapshot);
+        setError("");
+        if (initial && snapshot.business && snapshot.freshness?.status === "snapshot") {
+          followup = setTimeout(() => {if (!document.hidden) void load(false);}, 9_000);
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted && initial) {
+          setData(null);
+          setError(cause instanceof Error ? cause.message : "项目数据暂不可用");
+        }
+      } finally {
+        pending = false;
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    };
+    const refreshVisible = () => {if (bound && !document.hidden) void load(false);};
+    void load(revision > 0, true);
+    const timer = setInterval(refreshVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      controller.abort();
+      clearTimeout(followup);
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
   }, [roomId, days, revision]);
   if (!data && !error && !loading) return null;
   // Unbound rooms must not gain and then lose a header while their 404 arrives.

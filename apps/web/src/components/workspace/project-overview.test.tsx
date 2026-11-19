@@ -67,3 +67,22 @@ it("shows all participants as owners and separates evidence, documents and sourc
   fireEvent.mouseDown(screen.getByRole("tab",{name:"统计口径"}),{button:0,ctrlKey:false});
   expect(screen.getByText("来源：LAN")).toBeVisible();
 });
+
+it("refreshes reported progress when the project tab becomes visible", async () => {
+  const snapshot = {
+    project: {full_name: "example/scoped", status: "on_track", owner: null},
+    usage: {input_tokens: null, output_tokens: null},
+    milestone_progress: {completed: 1, accepted: 0, total: 2, basis: "reported"},
+    milestones: [], members: [], pulls: [], models: [], activities: [],
+    window: {days: 7}, cost: {label: "费用未知"}, quota: {reason: "未知"},
+  };
+  const fetchProject = vi.fn()
+    .mockResolvedValueOnce(Response.json(snapshot))
+    .mockResolvedValueOnce(Response.json({...snapshot, milestone_progress: {...snapshot.milestone_progress, completed: 2}}));
+  vi.stubGlobal("fetch", fetchProject);
+  render(<ProjectOverview roomId="room-refresh"/>);
+  fireEvent.click(await screen.findByRole("button", {name: /展开项目统计/}));
+  expect(screen.getByTitle("1/2")).toBeVisible();
+  fireEvent(document, new Event("visibilitychange"));
+  await waitFor(() => expect(screen.getByTitle("2/2")).toBeVisible());
+});
