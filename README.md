@@ -19,6 +19,22 @@
   <a href="docs/self-hosting.md">Self-hosting guide</a>
 </p>
 
+## 中文工作区 · 成员 Codex 代答
+
+在已接入的项目频道输入 `@`，选中成员后提问。对方电脑上的 Codex 会读取该成员指定的项目文档，并在群里以「本机 Codex 代答」回复。成员电脑需要在线并运行代答客户端。
+
+研发进度看板试点还可以回答「项目还差什么？」和「今天有几台电脑成功上传？」。接入时在成员代答配置中增加以下字段，项目标识填写看板中的 `project_key`。上传统计是全团队的数据，仅在允许该频道查看时开启。
+
+```json
+"dashboard": {
+  "origin": "http://127.0.0.1:4185",
+  "projectKey": "jiawei-wang-dev/project-pulse",
+  "shareTeamUploadCounts": true
+}
+```
+
+[配置成员、频道和共享文档](docs/demo-cn-guide.md#用成员电脑上的-codex-回答频道提问)
+
 ## Why Ember
 
 **Pay for the chat, not for every person in it.** Ember is free and open source, and runs on your own
