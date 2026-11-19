@@ -1128,9 +1128,13 @@ it("shows a structured mention to its recipient and posts only one visible Codex
   try {
     const ordinary = await post(socket, "<p>Grace, can you explain?</p>");
     const question = await post(socket, `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment> Can you explain?</p>`);
-    const inbox = await found<{messages: Array<{id: string; mentions_you?: boolean}>}>(token, "read_room", {room_id: room.id});
-    expect(inbox.messages.find(m => m.id === ordinary.id)?.mentions_you).toBeUndefined();
-    expect(inbox.messages.find(m => m.id === question.id)?.mentions_you).toBe(true);
+    const inbox = await found<{messages: Array<{id: string; mentions_you?: boolean; mention_from_id?: string}>}>(token, "read_room", {room_id: room.id});
+    const unmentioned = inbox.messages.find(m => m.id === ordinary.id);
+    expect(unmentioned?.mentions_you).toBeUndefined();
+    expect(unmentioned?.mention_from_id).toBeUndefined();
+    expect(inbox.messages.find(m => m.id === question.id)).toMatchObject({
+      mentions_you: true, mention_from_id: administrator.user.id, mention_recipient_id: member.user.id,
+    });
     expect(await refusal(token, "send_message", {room_id: room.id, mention_id: ordinary.id, text: "Unsolicited"})).toBe("That message no longer exists");
     const reply = {room_id: room.id, mention_id: question.id, text: "本机 Codex 代答｜已有 3 项记录"};
     expect(await found(token, "send_message", reply)).toMatchObject({message: {text: reply.text, reply_to: question.id}});

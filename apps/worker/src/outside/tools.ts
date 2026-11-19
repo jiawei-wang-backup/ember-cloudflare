@@ -111,7 +111,9 @@ async function readRoom(env: Env, access: OutsideAccess, { room_id: roomId, befo
   if (!page) throw new Refused("The room has no message with the id given as `before`.");
   return { room: shownRoom(room, access.userId), messages: page.messages.map(message => ({
     ...shownMessage(message),
-    ...(message.mentions.some(person => person.id === access.userId) && message.creator.id !== access.userId && {mentions_you: true}),
+    ...(message.mentions.some(person => person.id === access.userId) && message.creator.id !== access.userId && {
+      mentions_you: true, mention_from_id: message.creator.id, mention_recipient_id: access.userId,
+    }),
   })), older: page.hasMore && page.messages.length > 0 ? page.messages[0]!.id : null };
 }
 
