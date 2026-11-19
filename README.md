@@ -19,6 +19,17 @@
   <a href="docs/self-hosting.md">Self-hosting guide</a>
 </p>
 
+## 中文局域网接入
+
+**[下载新版中文局域网接入 ZIP](http://192.168.20.47:4185/api/v1/client-package)**
+
+解压后用 Codex 打开文件夹，把下面的提示词发给它。收到授权链接后，用本人账号登录 Ember 并点「允许」。首次使用时如需信任 HTTPS 证书，按 ZIP 内的 README 操作。
+
+```text
+读取当前目录的 README.md、PROMPT.txt 和 project-selection.md。先核对 ZIP 内 SHA256SUMS，确认服务端是局域网 Ember 及 Project Pulse。执行包内 ember-connect.py 的 connect 命令，在运行期间把输出的 Ember 授权链接交给我。我会用本人账号登录并在网页上决定是否允许。授权成功后，配置本机 Codex 的 ember-cn 连接，并说明如何重新打开会话检查是否能读取频道。请勿替我同意授权，也不要索取登录凭证。
+如果我要接入项目上报，请先按 PROMPT.txt 只读列出本机项目，等我明确选择后再试报。若只需要连接 Ember，网页授权完成即可。
+```
+
 ## 中文工作区 · 成员 Codex 代答
 
 在已接入的项目频道输入 `@`，选中成员后提问。对方电脑上的 Codex 会读取该成员指定的项目文档，并在群里以「本机 Codex 代答」回复。成员电脑需要在线并运行代答客户端。
