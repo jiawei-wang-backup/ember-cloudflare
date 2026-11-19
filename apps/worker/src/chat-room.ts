@@ -717,15 +717,24 @@ export class ChatRoom extends DurableObject<Env> {
    * was made private, for an app that reaches only open rooms, or that it was deleted, after the
    * Workspace checked, as it turns away a socket then.
    */
-  async createOutsideMessage(roomId: RoomId, { user, tags, authorizedAt }: OutsideSender, markup: string, threadId?: string): Promise<Message | string | null> {
+  async createOutsideMessage(roomId: RoomId, { user, tags, authorizedAt }: OutsideSender, markup: string, threadId?: string, mentionId?: string): Promise<Message | string | null> {
     return this.serially(async () => {
       if (await this.revocationsFor(roomId).refuse(tags, authorizedAt)) return null;
       const store = this.storeFor(roomId);
-      const inThread = threadId === undefined ? undefined : await this.inThread(store, threadId, false);
+      let clientMessageId = crypto.randomUUID() as string;
+      if (mentionId) {
+        const mentioned = await store.find(mentionId);
+        if (!mentioned || mentioned.deleted || mentioned.creator.id === user.id ||
+            !mentioned.mentions.some(person => person.id === user.id)) return MESSAGE_GONE;
+        clientMessageId = "member-codex-" + mentionId;
+        if ((await store.storedClientMessageIds(user, [clientMessageId])).length) return "already_posted";
+        threadId = mentioned.parentId ?? mentionId;
+      }
+      const inThread = threadId === undefined ? undefined : await this.inThread(store, threadId, Boolean(mentionId));
       if (inThread === null) return MESSAGE_GONE;
       const body = await this.prepare(markup);
       if (typeof body === "string") return body;
-      return this.create(store, user, crypto.randomUUID(), body, new Date().toISOString(), { kind: "reply", inThread });
+      return this.create(store, user, clientMessageId, body, new Date().toISOString(), { kind: "reply", inThread });
     });
   }
 
@@ -1061,6 +1070,8 @@ export class ChatRoom extends DurableObject<Env> {
         if (inThread === null) return this.send(ws, { type: "error", message: MESSAGE_GONE, clientMessageId: frame.clientMessageId, failed: frame.type });
         const body = await this.prepare(frame.body);
         if (typeof body === "string") return this.send(ws, { type: "error", message: body, clientMessageId: frame.clientMessageId, failed: frame.type });
+        if (frame.clientMessageId.startsWith("member-codex-") &&
+            (await store.storedClientMessageIds(user, [frame.clientMessageId])).length) return;
         await this.create(store, user, frame.clientMessageId, body, now, { inThread });
         // Everyone else takes the message as its author's stop.
         markTyping(ws, false);

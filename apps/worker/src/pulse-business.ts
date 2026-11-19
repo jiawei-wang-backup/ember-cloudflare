@@ -49,7 +49,21 @@ const journeys: Record<string, Array<[string, string[]]>> = {
 export function businessJourneys(key: string) {return (journeys[key.split("/").at(-1)!] || []).map(([title, moduleIds], index) => ({id: `journey-${index}`, title, moduleIds}));}
 export function businessOverview(data: PulseSnapshot): BusinessOverview | undefined {
   const definition = businessDefinition(data.project.key || data.project.full_name);
-  if (!definition) return undefined;
+  if (!definition) {
+    const milestones = data.milestones.map((stage, index) => ({
+      id: `reported-${index}`, title: stage.title, sourceTitle: stage.title, state: stage.state, evidence: stage.evidence || ""
+    }));
+    const done = milestones.filter(stage => stage.state === "completed" || stage.state === "accepted");
+    const pending = milestones.filter(stage => !done.includes(stage));
+    return {
+      audience: "", outcome: data.project.goal || "项目目标暂未上报",
+      modules: [{id: "reported", name: "项目阶段", outcome: "项目上报的里程碑", scenario: "", help: "",
+        acceptance: "", availability: "", milestones, available: done.map(stage => stage.title),
+        blockers: pending.map(stage => stage.title), status: data.project.status === "blocked" ? "blocked" :
+          pending.length ? "pending" : done.length ? "recorded" : "unknown"}],
+      provenance: "来自 Project Pulse 项目报告"
+    };
+  }
   const used = new Set<string>();
   const modules = definition.modules.map(module => {
     const milestones = module.stages.flatMap(([sourceTitle, title]) => {

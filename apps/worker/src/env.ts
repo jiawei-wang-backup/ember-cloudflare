@@ -17,6 +17,7 @@ export interface Env {
   /** Room ID -> repository UUID or canonical project key, with explicitly authorized Ember users. */
   PULSE_ROOMS?: string;
   PULSE_MENTION_PRIORITY?: string;
+  PULSE_TEAM_PROJECT_CHANNELS?: string;
   /** Verified, project-scoped demo snapshots only. Never a second database endpoint. */
   PULSE_DEMO_SNAPSHOTS?: string;
   ASSETS: Fetcher;

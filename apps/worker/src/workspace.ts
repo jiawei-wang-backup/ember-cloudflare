@@ -3333,8 +3333,22 @@ export class Workspace extends DurableObject<Env> {
       if (existing.length > 1) return "ambiguous";
       const room = existing[0];
       if (room?.kind === "closed") return {id: room.id, kind: room.kind, name: room.name, icon: room.icon, channelGroup: "project"};
-      return this.saveNewRoom(userId, {kind: "closed", name, channelGroup: "project", memberIds: [userId]});
+      const memberIds = this.env.PULSE_TEAM_PROJECT_CHANNELS === "true"
+        ? (await this.store.activePeople()).map(person => person.id)
+        : [userId];
+      const created = await this.saveNewRoom(userId, {kind: "closed", name, channelGroup: "project", memberIds});
+      if (this.env.PULSE_TEAM_PROJECT_CHANNELS === "true") {
+        await this.ctx.storage.put(`pulse-project-room:${created.id}`, repository);
+      }
+      return created;
     });
+  }
+
+  async teamProjectKeys(roomIds: RoomId[]): Promise<Record<RoomId, string>> {
+    if (this.env.PULSE_TEAM_PROJECT_CHANNELS !== "true") return {};
+    const results = await Promise.all(roomIds.map(async id =>
+      [id, await this.ctx.storage.get<string>(`pulse-project-room:${id}`)] as const));
+    return Object.fromEntries(results.filter((row): row is readonly [RoomId, string] => typeof row[1] === "string"));
   }
 
   private async saveNewRoom(creatorId: UserId, room: NewRoom): Promise<SharedRoom> {

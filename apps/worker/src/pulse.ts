@@ -1,4 +1,4 @@
-import { isRoomId, type RoomId, type UserId, type PulseSnapshot } from "@ember/protocol";
+import { isRoomId, type RoomId, type UserId, type PulseSnapshot, type SharedRoom } from "@ember/protocol";
 import { credentialsOf } from "./auth";
 import { workspace } from "./workspace";
 import type { Env } from "./env";
@@ -25,6 +25,17 @@ export function pulseBinding(env: Env, roomId: string): {projectId: string; memb
     return value && validId && Array.isArray(value.memberIds) && value.memberIds.every((x: unknown) => typeof x === "string") ? value : null;
   } catch { return null; }
 }
+function teamProjectKey(env: Env, room: Pick<SharedRoom, "kind" | "channelGroup">, key?: string): string | undefined {
+  if (env.PULSE_TEAM_PROJECT_CHANNELS !== "true" || env.PULSE_SOURCE !== "dashboard" ||
+      room.kind !== "closed" || room.channelGroup !== "project") return undefined;
+  if (!key) return undefined;
+  // Never infer grants for a repository whose channel is explicitly governed.
+  try {
+    const bindings = Object.values(JSON.parse(env.PULSE_ROOMS ?? "{}") as Record<string, {projectId: string}>);
+    return bindings.some(binding => binding.projectId.toLowerCase() === key) ? undefined : key;
+  } catch {return undefined;}
+}
+
 export async function pulseSnapshot(env: Env, projectId: string, days = 7, background?: BackgroundWork, refresh = false): Promise<PulseSnapshot> {
   if (!env.PULSE_URL || (env.PULSE_SOURCE !== "dashboard" && !env.PULSE_TOKEN)) throw new Error("Project Pulse 服务未配置");
   if (![1,7,30].includes(days)) throw new Error("无效时间窗");
@@ -54,7 +65,13 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   if (!credentials) return Response.json({error:"未登录"},{status:401,headers});
   const settings = isRoomId(roomId) && await workspace(env).roomSettings(credentials, roomId);
   if (!settings || settings === "not found") return Response.json({error:"频道不可访问"},{status:404,headers});
-  const binding = pulseBinding(env,roomId);
+  const explicit = pulseBinding(env, roomId);
+  const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true" && !explicit && settings.room.channelGroup === "project"
+    ? (await workspace(env).teamProjectKeys([roomId]))[roomId] : undefined;
+  const sharedKey = teamProjectKey(env, settings.room, registered);
+  const binding = explicit ?? (sharedKey ? {
+    projectId: sharedKey, memberIds: settings.people.filter(person => person.member).map(person => person.id)
+  } : null);
   if (!binding) return Response.json({error:"频道未关联 Project Pulse"},{status:404,headers});
   const user = await workspace(env).authenticate(credentials);
   if (!user || !binding.memberIds.includes(user.id)) return Response.json({error:"没有项目数据权限"},{status:403,headers});
@@ -76,11 +93,18 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
   if (!credentials) return Response.json({error: "未登录"}, {status: 401, headers});
   const [user, sidebar] = await Promise.all([workspace(env).authenticate(credentials), workspace(env).sidebar(credentials)]);
   if (!user || !sidebar) return Response.json({error: "未登录"}, {status: 401, headers});
-  const rooms = sidebar.rooms.filter(room => room.kind !== "direct" && pulseBinding(env, room.id)?.memberIds.includes(user.id));
-  const results = await Promise.all(rooms.map(async room => {
-    const binding = pulseBinding(env, room.id)!;
-    try { const data = await pulseSnapshot(env, binding.projectId, 7, background); return {roomId: room.id, name: room.kind !== "direct" ? room.name : "", progress: data.milestone_progress, freshness: data.freshness}; }
-    catch { return {roomId: room.id, name: room.kind !== "direct" ? room.name : "", progress: null}; }
+  const teamKeys = env.PULSE_TEAM_PROJECT_CHANNELS === "true"
+    ? await workspace(env).teamProjectKeys(sidebar.rooms.filter(room => room.kind === "closed" && room.channelGroup === "project").map(room => room.id))
+    : {};
+  const rooms = sidebar.rooms.flatMap(room => {
+    if (room.kind === "direct") return [];
+    const binding = pulseBinding(env, room.id);
+    const projectId = binding ? (binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]);
+    return projectId ? [{room, projectId}] : [];
+  });
+  const results = await Promise.all(rooms.map(async ({room, projectId}) => {
+    try { const data = await pulseSnapshot(env, projectId, 7, background); return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness}; }
+    catch { return {roomId: room.id, name: room.name, progress: null}; }
   }));
   return Response.json({projects: results}, {headers});
 }

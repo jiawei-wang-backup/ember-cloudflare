@@ -19,7 +19,7 @@ export function handleProjectBot(req:IncomingMessage,res:ServerResponse):boolean
       const body=JSON.parse(Buffer.concat(chunks).toString());
       const link=JSON.parse(readFileSync(path.join(state,"pulse-link.json"),"utf8"));
       const binding=link.bindings[body.room?.id];
-      if(!binding||!binding.memberIds.includes(body.user?.id)){res.writeHead(403).end();return;}
+      if(binding && !binding.memberIds.includes(body.user?.id)){res.writeHead(403).end();return;}
       const session=JSON.parse(readFileSync(path.join(state,"pulse-session.json"),"utf8"));
       const settingsResponse=await fetch(`http://localhost:5174/api/rooms/${body.room.id}/settings`,{headers:{Cookie:session.cookie},signal:AbortSignal.timeout(5000)});
       if(!settingsResponse.ok)throw new Error("频道权限不可用");

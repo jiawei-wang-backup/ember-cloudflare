@@ -1119,3 +1119,23 @@ it("creates a private project channel only with the granted scopes and reuses it
   expect((await roomsFor(reader)).some(({id}) => id === room.id)).toBe(false);
   expect((await called(allowed, "send_message", {room_id: room.id, text: "已完成首次同步"})).isError).toBeFalsy();
 });
+
+it("shows a structured mention to its recipient and posts only one visible Codex reply", async () => {
+  const {member, administrator} = await setUpOn();
+  const token = (await connected(member, {scope: "read write"})).tokens.access_token;
+  const room = (await roomsFor(token)).find(room => room.name === "general")!;
+  const socket = await connect(room.id, administrator);
+  try {
+    const ordinary = await post(socket, "<p>Grace, can you explain?</p>");
+    const question = await post(socket, `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment> Can you explain?</p>`);
+    const inbox = await found<{messages: Array<{id: string; mentions_you?: boolean}>}>(token, "read_room", {room_id: room.id});
+    expect(inbox.messages.find(m => m.id === ordinary.id)?.mentions_you).toBeUndefined();
+    expect(inbox.messages.find(m => m.id === question.id)?.mentions_you).toBe(true);
+    expect(await refusal(token, "send_message", {room_id: room.id, mention_id: ordinary.id, text: "Unsolicited"})).toBe("That message no longer exists");
+    const reply = {room_id: room.id, mention_id: question.id, text: "本机 Codex 代答｜已有 3 项记录"};
+    expect(await found(token, "send_message", reply)).toMatchObject({message: {text: reply.text, reply_to: question.id}});
+    expect(await found(token, "send_message", reply)).toMatchObject({already_posted: true});
+    const history = await found<{messages: Array<{text: string}>}>(token, "read_room", {room_id: room.id});
+    expect(history.messages.filter(message => message.text === reply.text)).toHaveLength(1);
+  } finally {socket.close();}
+});

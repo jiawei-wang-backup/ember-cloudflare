@@ -1,7 +1,7 @@
 import {compactPulseNumber, type PulseSnapshot} from "@ember/protocol";
 import {html} from "../seed/markup.ts";
 
-export const quickFactQuestion = (q: string) => /^(?:@?项目助手\s*)?(?:项目现在怎么样|项目还差什么|已经做完了什么)[？?。]?$/u.test(q.trim());
+export const quickFactQuestion = (q: string) => /^(?:@?项目助手\s*)?(?:项目现在怎么样|项目还差什么|已经做完了什么|(?:给我)?讲(?:一)?讲项目背景|项目背景|项目介绍)[？?。]?$/u.test(q.trim());
 
 export function factsReply(data: PulseSnapshot, roomId: string, question: string, context = "") {
   const href = `/rooms/${roomId}`;
