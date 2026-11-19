@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import sys
 import time
+import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -55,7 +56,7 @@ def save(client, tokens):
     temporary.replace(CREDENTIALS)
 
 
-def connect(include_private=False, include_write=False, create_projects=False):
+def connect(include_private=False, include_write=False, create_projects=False, open_browser=False):
     scopes = ["read"]
     if include_write or create_projects:
         scopes.append("write")
@@ -92,7 +93,10 @@ def connect(include_private=False, include_write=False, create_projects=False):
                            "state": nonce, "code_challenge": challenge, "code_challenge_method": "S256",
                            "scope": " ".join(scopes),
                            "resource": RESOURCE})
-        print(ORIGIN + "/oauth/authorize?" + query, flush=True)
+        url = ORIGIN + "/oauth/authorize?" + query
+        print(url, flush=True)
+        if open_browser:
+            webbrowser.open(url)
         deadline = time.monotonic() + 300
         while not result and time.monotonic() < deadline:
             callback.timeout = max(0, deadline - time.monotonic())
@@ -158,7 +162,7 @@ def main():
     if args.mode == "rooms":
         print(json.dumps(call_tool("list_rooms", {})))
         return
-    connect(args.private, args.write, args.project_channels)
+    connect(args.private, args.write, args.project_channels, open_browser=True)
     subprocess.run(["codex", "mcp", "add", "ember-cn", "--", sys.executable,
                     str(Path(__file__).resolve()), "serve"], check=True)
     print("Ember 网页授权已完成。重新打开 Codex 会话即可调用 ember-cn。")
