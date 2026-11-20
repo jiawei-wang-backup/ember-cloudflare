@@ -11,6 +11,7 @@ export type StorageBackend = "do-sqlite" | "d1";
 export interface Env {
   PULSE_URL?: string;
   PULSE_TOKEN?: string;
+  PULSE_DEVICE_BIND_TOKEN?: string;
   PULSE_SOURCE?: "dashboard";
   /** Explicit operator opt-in for a LAN HTTP source, including its port. Never supplied by a client. */
   PULSE_HTTP_ORIGIN?: string;

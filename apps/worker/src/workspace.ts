@@ -1662,6 +1662,11 @@ export class Workspace extends DurableObject<Env> {
     return (await this.outside.connectionsOf(person.user.id, new Date().toISOString())).map(shownConnection);
   }
 
+  async pulseReporter(userId: UserId): Promise<User | null> {
+    const person = await this.store.activePerson(userId);
+    return person && person.role !== "bot" ? { id: person.id, name: person.name } : null;
+  }
+
   /** The rooms an AI app connected as `userId` with `scopes` lists: those they're in that it reaches (`reaches`). */
   async outsideRooms({ userId, scopes }: OutsideReach): Promise<SidebarRoom[]> {
     return (await this.store.roomsFor(userId)).rooms.filter(({ kind }) => reaches(scopes, kind));

@@ -138,6 +138,8 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   if (existsSync(config)) {
     const configured = JSON.parse(readFileSync(config, "utf8"));
     configured.assets.directory = assetRoot;
+    const deviceBindingKey = path.join(state, "pulse-device-bind-token");
+    if (existsSync(deviceBindingKey)) configured.vars.PULSE_DEVICE_BIND_TOKEN = readFileSync(deviceBindingKey, "utf8").trim();
     configured.vars.PULSE_DEMO_SNAPSHOTS = JSON.stringify(projectSnapshots(state));
     const linkFile = path.join(state, "pulse-link.json");
     const sessionFile = path.join(state, "pulse-session.json");

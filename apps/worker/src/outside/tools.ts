@@ -205,6 +205,32 @@ const CODEX_THINKING: Tool = {
   },
 };
 
+const BIND_PULSE_DEVICE: Tool = {
+  name: "bind_pulse_device",
+  title: "Bind Project Pulse device to the signed-in member",
+  description: "Associates this reporting device with the Ember account that approved the connection.",
+  takes: { credential_digest: {type: "string", description: "SHA-256 digest of this device's Project Pulse LAN credential."} },
+  required: ["credential_digest"],
+  async run(env, access, {credential_digest}) {
+    if (typeof credential_digest !== "string" || !/^[a-f0-9]{64}$/.test(credential_digest) ||
+        !env.PULSE_DEVICE_BIND_TOKEN || !env.PULSE_URL) throw new Refused("无法核验上报设备。");
+    const base = new URL(env.PULSE_URL);
+    if (base.protocol !== "https:" && !(base.protocol === "http:" &&
+        (base.origin === env.PULSE_HTTP_ORIGIN || base.hostname === "127.0.0.1"))) throw new Refused("上报服务地址不可用。");
+    const person = await workspace(env).pulseReporter(access.userId);
+    if (!person) throw new Refused("Ember 成员账号不可用。");
+    const response = await fetch(new URL("/api/v1/ember-device-binding", base), {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(5000),
+      headers: {"Content-Type": "application/json", Authorization: `Bearer ${env.PULSE_DEVICE_BIND_TOKEN}`},
+      body: JSON.stringify({credential_digest, member_id: person.id, display_name: person.name}),
+    });
+    if (response.status === 404) return {status: "waiting_for_report"};
+    if (response.status === 409) throw new Refused("此设备已绑定其他成员。");
+    if (!response.ok) throw new Refused("暂时无法绑定上报设备。");
+    return {status: "bound", name: person.name};
+  },
+};
+
 /** The tools a connection allowed to read has. */
 const READING: Tool[] = [
   {
@@ -311,7 +337,9 @@ async function answered(found: Promise<unknown>) {
 /** Gives `server` the tools `access` allows its app, each doing what it does as the connection's person. */
 export function registerTools(server: McpServer, env: Env, access: OutsideAccess): void {
   for (const { tools, annotations } of access.scopes.flatMap((scope) => TOOLS[scope] ?? [])) {
-    const available = tools === SENDING && env.PULSE_TEAM_PROJECT_CHANNELS === "true" ? [...tools, CODEX_THINKING] : tools;
+    const available = tools === SENDING && env.PULSE_TEAM_PROJECT_CHANNELS === "true"
+      ? [...tools, CODEX_THINKING, ...(env.PULSE_DEVICE_BIND_TOKEN && access.scopes.includes("create_project_channels") ? [BIND_PULSE_DEVICE] : [])]
+      : tools;
     for (const { name, title, description, takes, required, run } of available) {
       const inputSchema = fromJsonSchema({ type: "object" as const, properties: takes, required, additionalProperties: false });
       server.registerTool(name, { title, description, inputSchema, annotations }, (given) => answered(run(env, access, given as Record<string, unknown>)));

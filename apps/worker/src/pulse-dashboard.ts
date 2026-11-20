@@ -11,7 +11,7 @@ export interface PulseDashboard {
   project_reports: Report[];
   workspace_states: Array<{workspace_name: string; status: string}>;
   project_usage: Array<{project_key: string; input_tokens: string | null; output_tokens: string | null}>;
-  memberships: Array<{display_name: string; full_name: string | null; workspace_name: string | null; session_count: number; last_activity_at: string}>;
+  memberships: Array<{developer_id?: string; display_name: string; full_name: string | null; workspace_name: string | null; session_count: number; last_activity_at: string}>;
   sessions: Array<{full_name: string | null; workspace_name: string | null; display_name: string; title: string | null; display_title?: string | null; summary: string | null; last_activity_at: string}>;
   pulls: Array<PulseSnapshot["pulls"][number] & {full_name: string}>;
 }
@@ -36,11 +36,12 @@ export function dashboardProject(data: PulseDashboard, projectKey: string, days:
   };
   const members: PulseSnapshot["members"] = [];
   for (const row of data.memberships.filter(row => belongs(row.full_name, row.workspace_name))) {
-    const found = members.find(member => member.display_name === row.display_name);
+    const found = members.find(member => row.developer_id ? member.developer_id === row.developer_id
+      : member.developer_id === null && member.display_name === row.display_name);
     if (found) {
       found.sessions += row.session_count;
       if (row.last_activity_at > found.last_activity_at) found.last_activity_at = row.last_activity_at;
-    } else members.push({developer_id: null, display_name: row.display_name, role: "采集参与者（职责未提供）", last_activity_at: row.last_activity_at, sessions: row.session_count, usage: null});
+    } else members.push({developer_id: row.developer_id ?? null, display_name: row.display_name, role: "采集参与者（职责未提供）", last_activity_at: row.last_activity_at, sessions: row.session_count, usage: null});
   }
   const milestones = report ? report.milestones.map(m => ({...m, due_on: null})) : project!.milestones;
   const completed = milestones.filter(m => report ? m.state === "completed" : m.state === "accepted").length;
