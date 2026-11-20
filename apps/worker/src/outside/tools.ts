@@ -245,12 +245,19 @@ const CHANNEL_CREATION: Tool[] = [{
   name: "create_project_channel",
   title: "Create a private project channel",
   description: "Creates the private project channel for a confirmed GitHub repository, or returns the matching private project channel you are already in. Only you are added to a new channel.",
-  takes: { repository: {type: "string", description: "The confirmed GitHub repository, owner/name."} },
+  takes: {
+    repository: {type: "string", description: "The confirmed GitHub repository, owner/name."},
+    project_name: {type: "string", description: "A Chinese display name for the project, without the repository suffix."},
+  },
   required: ["repository"],
-  async run(env, access, {repository}) {
+  async run(env, access, {repository, project_name}) {
     if (typeof repository !== "string" || repository.length > 95 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository))
       throw new Refused("Give a confirmed GitHub repository as owner/name.");
-    const room = await workspace(env).outsideProjectChannel(access, repository.toLowerCase());
+    const projectName = typeof project_name === "string" ? project_name.trim() : undefined;
+    if (project_name !== undefined && (!projectName || projectName.length > 48 ||
+        !/^\p{Script=Han}/u.test(projectName) || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(projectName)))
+      throw new Refused("Give a Chinese project name of up to 48 characters.");
+    const room = await workspace(env).outsideProjectChannel(access, repository.toLowerCase(), projectName);
     if (room === "forbidden") throw new Refused("Channel creation needs project channel and private room permissions, and permission to create rooms in Ember.");
     if (room === "ambiguous") throw new Refused("More than one private project channel uses this repository name.");
     return {room: shownRoom(room, access.userId)};

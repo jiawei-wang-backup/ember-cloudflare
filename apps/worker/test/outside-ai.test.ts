@@ -13,12 +13,14 @@ import {
   type YourOutsideAi,
 } from "@ember/protocol/outside";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
 import { ChatRoom } from "../src/chat-room";
 import { toBase64url } from "../src/encoding";
+import type { Env } from "../src/env";
 import { MAX_SHOWN_LENGTH, MESSAGES_FOUND, SENDING_TOO_FAST } from "../src/outside/tools";
 import { SearchIndex } from "../src/search-index";
 import { MAX_OUTSIDE_CLIENTS, OUTSIDE_SENDS_PER_MINUTE } from "../src/workspace";
-import { api, connect, cookieOf, createRoom, direct, freshDeploy, origin, post, roomSql, settle, shown, signIn, upload, workspaceSql, type Session, type Socket } from "./support";
+import { api, connect, cookieOf, createRoom, direct, freshDeploy, origin, post, roomSql, settle, shown, signIn, upload, workspaceSql, workspaceStub, type Session, type Socket } from "./support";
 
 // Outside AI: an AI app connects to Ember over the Model Context Protocol, at `/mcp`, and signs in
 // with OAuth, where Ember is the authorization server. The tests are the app: they find out how to sign
@@ -1118,6 +1120,28 @@ it("creates a private project channel only with the granted scopes and reuses it
   const reader = (await connected(administrator, {scope: "read private"}, [], ["private"])).tokens.access_token;
   expect((await roomsFor(reader)).some(({id}) => id === room.id)).toBe(false);
   expect((await called(allowed, "send_message", {room_id: room.id, text: "已完成首次同步"})).isError).toBeFalsy();
+});
+
+it("uses a Chinese project title and reuses the registered room in the LAN workspace", async () => {
+  const { member } = await setUpOn();
+  const scope = "read write private create_project_channels";
+  const token = (await connected(member, {scope}, [], ["private", "create_project_channels"])).tokens.access_token;
+  const original = await runInDurableObject(workspaceStub(), (instance) => {
+    const object = instance as unknown as {env: Env};
+    const original = object.env;
+    object.env = {...original, PULSE_TEAM_PROJECT_CHANNELS: "true"};
+    return original;
+  });
+  try {
+    const repository = "example/MonashMate";
+    const first = await called(token, "create_project_channel", {repository, project_name: "校园政策问答"});
+    expect(first.isError).toBeFalsy();
+    expect(JSON.parse(first.text).room.name).toBe("校园政策问答（monashmate）");
+    expect((await called(token, "create_project_channel", {repository})).text).toEqual(first.text);
+    expect((await called(token, "create_project_channel", {repository, project_name: "校园知识库"})).text).toEqual(first.text);
+  } finally {
+    await runInDurableObject(workspaceStub(), (instance) => void ((instance as unknown as {env: Env}).env = original));
+  }
 });
 
 it("shows a structured mention to its recipient and posts only one visible Codex reply", async () => {
