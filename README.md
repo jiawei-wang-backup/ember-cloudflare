@@ -21,7 +21,7 @@
 
 ## 中文局域网接入
 
-**[下载中文局域网接入包 v3.6.0-r15（ZIP）](https://github.com/jiawei-wang-dev/project-pulse/releases/download/report-client-v3.6.0-20261117/project-pulse-report-3.6.0-lan-r15.zip)**
+**[下载中文局域网接入包 v3.6.0-r16（ZIP）](https://github.com/jiawei-wang-backup/ember-cloudflare/releases/download/lan-client-v3.6.0-r16/project-pulse-report-3.6.0-lan-r16.zip)** · [下载接入提示词](https://github.com/jiawei-wang-backup/ember-cloudflare/releases/download/lan-client-v3.6.0-r16/ember-lan-onboarding-r16.txt)
 
 ZIP 可直接从 GitHub 下载。解压后，授权和上报需要连接团队局域网。
 
@@ -31,10 +31,14 @@ ZIP 可直接从 GitHub 下载。解压后，授权和上报需要连接团队�
 
 绑定频道后会自动同步首份项目快照，只有状态变化也能更新。Ember 暂时不可用时，保留待发布状态供下一轮补发。
 
-r15 新增频道内的「成员名 · Codex 正在思考…」。已有成员升级 r15 并重启代答监听后，其他人就能在回复前看到这条提示。
+r16 会用已授权的 Ember 账号自动归集上报设备。同一账号的多台设备会归到同一个成员名下。已有成员用新版接入包更新原目录，下次同步时会自动补绑。
+
+被 @ 的成员开始准备回复时，频道会显示「成员名 · Codex 正在思考…」。
 
 ```text
 请直接完成接入。用当前解压目录的 README.md、PROMPT.txt、project-selection.md 和包内工具，不要让我手填服务端地址、编辑配置或另发提示词。
+
+已授权 Ember 的设备在成功上报后会自动绑定到当前 Ember 成员。同一账号的多台设备会合在同一成员下统计。检查 ember_reporting_member，已有上报数据的设备可以执行 pulse-onboard.py sync-ember 补绑定。
 
 如果当前目录已有接入配置，保留项目绑定、授权和续传状态。升级时替换为 r15 的脚本并重启代答监听，检查 ember_member_listener 是否就绪。
 
