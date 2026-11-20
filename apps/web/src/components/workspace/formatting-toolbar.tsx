@@ -238,7 +238,7 @@ function ParagraphMenu({ formatting, tabbable, onFocus }: ParagraphMenuProps) {
           {STYLES.map((style) => (
             <DropdownMenuRadioItem key={style} value={style} className="min-w-48">
               {FORMATTING_NAMES[style]}
-              {style !== "paragraph" && <span className="ms-auto ps-6 text-xs text-muted-foreground">{style.toUpperCase()}</span>}
+              {import.meta.env.MODE !== "demo-cn" && style !== "paragraph" && <span className="ms-auto ps-6 text-xs text-muted-foreground">{style.toUpperCase()}</span>}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

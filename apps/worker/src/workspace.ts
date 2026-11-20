@@ -3338,19 +3338,25 @@ export class Workspace extends DurableObject<Env> {
       const sharedProjects = this.env.PULSE_TEAM_PROJECT_CHANNELS === "true";
       const legacyName = `项目 · ${repository}`;
       const rooms = (await this.store.roomsFor(userId)).rooms.flatMap(room => room.kind === "closed" ? [room] : []);
-      const registered = await this.teamProjectKeys(rooms.filter(room => room.channelGroup === "project").map(room => room.id));
       let configured: Record<string, {projectId?: string}> = {};
       if (sharedProjects) {
         try { configured = JSON.parse(this.env.PULSE_ROOMS || "{}"); } catch { return "forbidden"; }
       }
-      const existing = rooms.filter(room =>
+      const projectRooms = rooms.filter(room => room.channelGroup === "project" || configured[room.id]);
+      const registered = await this.teamProjectBindings(projectRooms.map(room => room.id));
+      const existing = projectRooms.filter(room =>
         configured[room.id]?.projectId?.toLowerCase() === repository ||
-        (room.channelGroup === "project" && (registered[room.id] === repository || (!registered[room.id] && room.name.toLowerCase() === legacyName))));
+        (room.channelGroup === "project" && (registered[room.id]?.repository === repository || (!registered[room.id] && room.name.toLowerCase() === legacyName))));
       if (existing.length > 1) return "ambiguous";
       const room = existing[0];
       if (room?.kind === "closed") {
-        if (sharedProjects && !registered[room.id] && !configured[room.id]) {
-          await this.ctx.storage.put(`pulse-project-room:${room.id}`, repository);
+        if (sharedProjects) {
+          const binding = registered[room.id];
+          const settings = binding && await this.store.roomSettings(room.id, userId);
+          const ownerId = binding?.ownerId ?? settings?.creatorId;
+          if (!settings?.people.some(person => person.id === ownerId && person.member)) {
+            await this.ctx.storage.put(`pulse-project-room:${room.id}`, { repository, ownerId: userId });
+          }
         }
         return {id: room.id, kind: room.kind, name: room.name, icon: room.icon, channelGroup: "project"};
       }
@@ -3361,17 +3367,20 @@ export class Workspace extends DurableObject<Env> {
         : [userId];
       const created = await this.saveNewRoom(userId, {kind: "closed", name, channelGroup: "project", memberIds});
       if (sharedProjects) {
-        await this.ctx.storage.put(`pulse-project-room:${created.id}`, repository);
+        await this.ctx.storage.put(`pulse-project-room:${created.id}`, { repository, ownerId: userId });
       }
       return created;
     });
   }
 
-  async teamProjectKeys(roomIds: RoomId[]): Promise<Record<RoomId, string>> {
-    if (this.env.PULSE_TEAM_PROJECT_CHANNELS !== "true") return {};
-    const results = await Promise.all(roomIds.map(async id =>
-      [id, await this.ctx.storage.get<string>(`pulse-project-room:${id}`)] as const));
-    return Object.fromEntries(results.filter((row): row is readonly [RoomId, string] => typeof row[1] === "string"));
+  async teamProjectBindings(roomIds: RoomId[]): Promise<Record<RoomId, { repository: string; ownerId?: UserId }>> {
+    if (this.env.PULSE_TEAM_PROJECT_CHANNELS !== "true" || !roomIds.length) return {};
+    const entries = await Promise.all(roomIds.map(async id => {
+      const entry = await this.ctx.storage.get<string | { repository: string; ownerId: UserId }>(`pulse-project-room:${id}`);
+      // Existing dynamically created rooms stored only the repository.
+      return [id, typeof entry === "string" ? { repository: entry } : entry] as const;
+    }));
+    return Object.fromEntries(entries.flatMap(([id, entry]) => entry ? [[id, entry] as const] : []));
   }
 
   private async saveNewRoom(creatorId: UserId, room: NewRoom): Promise<SharedRoom> {
@@ -4738,7 +4747,7 @@ export class Workspace extends DurableObject<Env> {
    * Room `roomId`'s settings, as the person `credentials` signs in sees them: "not found" unless they're
    * in it and it isn't a DM, or null without a valid session.
    */
-  async roomSettings(credentials: Credentials, roomId: RoomId): Promise<RoomSettings | "not found" | null> {
+  async roomSettings(credentials: Credentials, roomId: RoomId): Promise<(RoomSettings & { creatorId: UserId | null }) | "not found" | null> {
     const user = await this.authenticate(credentials);
     if (!user) return null;
     return (await this.store.roomSettings(roomId, user.id)) ?? "not found";

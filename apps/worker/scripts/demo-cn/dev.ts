@@ -1,5 +1,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import http from "node:http";
+import https from "node:https";
+import type { TLSSocket } from "node:tls";
 import net from "node:net";
 import path from "node:path";
 import { networkInterfaces } from "node:os";
@@ -17,6 +19,9 @@ export const origin = "http://localhost:5174";
 export const identity = "ember-demo-cn-v1";
 const state = path.join(root, ".wrangler/demo-cn");
 const lan = process.argv.slice(2).includes("--lan");
+const tlsDir = lan ? process.env.EMBER_LAN_TLS_DIR : undefined;
+const tlsProxyKey = tlsDir && readFileSync(path.join(tlsDir, "proxy-key"), "utf8").trim();
+const isTls = (req: http.IncomingMessage) => (req.socket as TLSSocket).encrypted === true;
 const prPollIntervalMs = 30 * 60_000;
 if (process.argv.slice(2).some(arg => arg !== "--lan")) throw new Error("启动参数只支持 --lan。");
 const loopback = (address: string | undefined) => address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
@@ -31,6 +36,14 @@ const headersOf = (req: http.IncomingMessage) => {
   delete headers.forwarded;
   delete headers["x-forwarded-host"];
   delete headers["x-forwarded-proto"];
+  delete headers["x-ember-lan-tls"];
+  delete headers["x-ember-lan-origin"];
+  delete headers["x-ember-lan-site"];
+  if (tlsProxyKey && isTls(req)) {
+    headers["x-ember-lan-tls"] = tlsProxyKey;
+    headers["x-ember-lan-origin"] = encodeURIComponent(req.headers.origin ?? "");
+    headers["x-ember-lan-site"] = req.headers["sec-fetch-site"] ?? "";
+  }
   if (!loopback(req.socket.remoteAddress)) headers["cf-connecting-ip"] = req.socket.remoteAddress?.replace(/^::ffff:/, "");
   return headers;
 };
@@ -59,7 +72,7 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
   const reply = (status: number, error: string) => res.writeHead(status, {
     "Content-Type": "application/json", "Cache-Control": "no-store",
   }).end(JSON.stringify({error}));
-  if (req.method !== "POST" || req.headers.origin !== `http://${req.headers.host}` || req.headers["sec-fetch-site"] === "cross-site") {
+  if (req.method !== "POST" || req.headers.origin !== `${isTls(req) ? "https" : "http"}://${req.headers.host}` || req.headers["sec-fetch-site"] === "cross-site") {
     reply(405, "请从演示登录页进入。");
     return;
   }
@@ -73,11 +86,11 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
     }
     const {emailAddress} = JSON.parse(Buffer.concat(chunks).toString());
     const {accounts, password} = JSON.parse(readFileSync(path.join(state, "accounts.json"), "utf8")) as {
-      accounts: {emailAddress: string}[]; password: string;
+      accounts: {emailAddress: string; loginAlias?: string}[]; password: string;
     };
     const login = typeof emailAddress === "string" ? emailAddress.trim().toLowerCase() : "";
-    const account = login === "admin" ? accounts[0] : accounts.slice(1).find(person =>
-      person.emailAddress.toLowerCase() === login);
+    const account = login === "admin" ? accounts[0] : accounts.find(person =>
+      person.emailAddress.toLowerCase() === login || person.loginAlias === login);
     if (!account) {reply(401, "请使用已有的演示账号。"); return;}
     const body = JSON.stringify({emailAddress: account.emailAddress, password});
     const upstream = http.request({
@@ -94,7 +107,7 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 }
 
-const server = http.createServer((req, res) => {
+const handleRequest: http.RequestListener = (req, res) => {
   // Local tooling and webhook secrets are never exposed through the LAN entry.
   if (!loopback(req.socket.remoteAddress) && localPath(req)) {res.writeHead(404).end(); return;}
   if (handleDemoBot(req, res)) return;
@@ -109,13 +122,18 @@ const server = http.createServer((req, res) => {
   if (pathname === "/api/demo-session") {void demoSignIn(req, res); return;}
   if (["GET", "HEAD"].includes(req.method || "") && (staticPrefixes.some(prefix => pathname.startsWith(prefix)) || ["/ember-icon.png", "/app-version.json", "/globe.svg"].includes(pathname))) {void staticAsset(req, res); return;}
   const upstream = http.request({ hostname: "127.0.0.1", port: 8790, path: req.url, method: req.method, headers: headersOf(req) }, (answer) => {
+    const challenge = answer.headers["www-authenticate"];
+    if (isTls(req) && pathname === "/mcp" && typeof challenge === "string") {
+      answer.headers["www-authenticate"] = challenge.replace('resource_metadata="http://', 'resource_metadata="https://');
+    }
     res.writeHead(answer.statusCode!, answer.headers);
     answer.pipe(res);
   });
   upstream.on("error", () => { if (!res.headersSent) res.writeHead(503); res.end("中文演示 Worker 正在启动，请稍后刷新。"); });
   req.pipe(upstream);
-});
-server.on("upgrade", (req, socket, head) => {
+};
+const server = http.createServer(handleRequest);
+const handleUpgrade = (req: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
   if (!loopback(req.socket.remoteAddress) && localPath(req)) {socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"); return;}
   const upstream = net.connect(8790, "127.0.0.1", () => {
     upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${Object.entries(headersOf(req)).filter(([,value])=>value!==undefined).map(([k, v]) => `${k}: ${v}`).join("\r\n")}\r\n\r\n`);
@@ -125,7 +143,10 @@ server.on("upgrade", (req, socket, head) => {
   upstream.on("error", () => socket.destroy());
   socket.on("error", () => upstream.destroy());
   socket.on("close", () => upstream.destroy());
-});
+};
+server.on("upgrade", handleUpgrade);
+const secureServer = tlsDir && https.createServer({cert: readFileSync(path.join(tlsDir, "server.pem")), key: readFileSync(path.join(tlsDir, "server-key.pem"))}, handleRequest);
+if (secureServer) secureServer.on("upgrade", handleUpgrade);
 server.on("error", (error) => { console.error(error); process.exit(1); });
 server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   // Refuse an occupied upstream port before starting, so the proxy cannot seed an unrelated Worker.
@@ -138,6 +159,7 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   if (existsSync(config)) {
     const configured = JSON.parse(readFileSync(config, "utf8"));
     configured.assets.directory = assetRoot;
+    if (tlsProxyKey) configured.vars.EMBER_LAN_TLS_PROXY_KEY = tlsProxyKey;
     const deviceBindingKey = path.join(state, "pulse-device-bind-token");
     if (existsSync(deviceBindingKey)) configured.vars.PULSE_DEVICE_BIND_TOKEN = readFileSync(deviceBindingKey, "utf8").trim();
     configured.vars.PULSE_DEMO_SNAPSHOTS = JSON.stringify(projectSnapshots(state));
@@ -151,9 +173,10 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     }
     writeFileSync(config, JSON.stringify(configured, null, 2), {mode: 0o600});
   }
+  if (secureServer) secureServer.listen(5443, "0.0.0.0");
   const child = spawn(process.execPath, [path.join(root, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--ip", "127.0.0.1", "--port", "8790", "--name", "ember-demo-cn", "-c", existsSync(config)?config:path.join(root, "wrangler.jsonc"), "--persist-to", path.join(state, "state"), "--var", "SESSION_SECRET:demo-cn-local-only", "--var", "EMBER_GUEST_SIGN_IN:false", ...(lan ? ["--var", "DISABLE_SSL:lan-http"] : [])], { cwd: root, stdio: "inherit" });
   child.on("exit", (code) => { server.close(); process.exit(code ?? 1); });
-  for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { child.kill(signal); server.close(); });
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { child.kill(signal); server.close(); if (secureServer) secureServer.close(); });
   function startPRPoll(ledger: string, company: boolean) {
     if (!existsSync(ledger)) return;
     const repo = company ? companyPilotRepo : pilotRepo;

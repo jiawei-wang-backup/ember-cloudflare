@@ -30,7 +30,7 @@ export function ShortcutTooltip({ label, shortcut, hidden = false, children }: P
         {shortcut && (
           <span aria-hidden className="flex gap-0.5">
             {shortcut.keys.map((key) => (
-              <kbd key={key} className="grid min-w-[18px] place-items-center rounded-[4px] bg-background/20 px-1 font-sans text-[11px] leading-[18px]">
+              <kbd key={key} className={`grid min-w-[18px] place-items-center rounded-[4px] px-1 font-sans text-[11px] leading-[18px] ${import.meta.env.MODE === "demo-cn" ? "bg-hover" : "bg-background/20"}`}>
                 {key}
               </kbd>
             ))}

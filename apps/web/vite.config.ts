@@ -50,7 +50,7 @@ function roomIcons(): Plugin {
  * keeps it from asking a CDN, and a CDN would hear from everyone who opens the picker.
  */
 function emojiData(): Plugin {
-  const FILES = ["en/data.json", "en/messages.json"];
+  const FILES = ["en/data.json", "en/messages.json", "zh/data.json", "zh/messages.json"];
   const read = (file: string) => readFileSync(createRequire(import.meta.url).resolve(`emojibase-data/${file}`));
   return {
     name: "ember-emoji-data",

@@ -178,6 +178,7 @@ export interface Env {
    * out HSTS. Loopback addresses, where `wrangler dev` serves, never need it.
    */
   DISABLE_SSL?: string;
+  EMBER_LAN_TLS_PROXY_KEY?: string;
 }
 
 /** Whether people may sign in with just a name, and guests who did may stay signed in. */

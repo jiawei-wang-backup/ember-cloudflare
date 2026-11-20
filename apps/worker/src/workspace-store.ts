@@ -1421,6 +1421,7 @@ function navigationIconsIn(settings: Record<string, unknown> | null): Navigation
 }
 
 interface RoomToChangeRow extends SharedRoom {
+  creator_id: UserId | null;
   channel_group: SharedRoom["channelGroup"] | null;
   can_administer: number;
 }
@@ -2553,7 +2554,7 @@ const PRIORITIZED_MENTIONABLE_MEMBERS = MENTIONABLE_MEMBERS.replace(
 const CAN_ADMINISTER = `(users.role = ${ADMINISTRATOR} OR rooms.creator_id = users.id) AS can_administer`;
 
 /** A room someone is in, unless it's a DM, and whether they can change it. */
-export const ROOM_TO_CHANGE = `SELECT rooms.id, rooms.kind, rooms.name, rooms.icon, rooms.channel_group, ${CAN_ADMINISTER}
+export const ROOM_TO_CHANGE = `SELECT rooms.id, rooms.kind, rooms.name, rooms.icon, rooms.channel_group, rooms.creator_id, ${CAN_ADMINISTER}
   FROM memberships JOIN rooms ON rooms.id = memberships.room_id JOIN users ON users.id = memberships.user_id
   WHERE memberships.room_id = ? AND memberships.user_id = ? AND rooms.kind <> 'direct'`;
 
@@ -4739,12 +4740,12 @@ export class WorkspaceStore {
   }
 
   /** The same, with everyone active who can be put in a room and whether they're in it, read together. */
-  async roomSettings(roomId: RoomId, userId: UserId): Promise<RoomSettings | null> {
+  async roomSettings(roomId: RoomId, userId: UserId): Promise<(RoomSettings & { creatorId: UserId | null }) | null> {
     const [[row], people] = (await this.db.batch([statement(ROOM_TO_CHANGE, roomId, userId), statement(ACTIVE_PEOPLE_IN_ROOM, roomId)])) as [
       RoomToChangeRow[],
       Array<User & { member: number }>,
     ];
-    return row ? { ...roomToChange(row), people: people.map((person) => ({ ...person, member: person.member === 1 })) } : null;
+    return row ? { ...roomToChange(row), creatorId: row.creator_id, people: people.map((person) => ({ ...person, member: person.member === 1 })) } : null;
   }
 
   /**

@@ -1,5 +1,6 @@
 import { useContext, useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type Ref } from "react";
 import type { Favorites, Invitation, Involvement, Me, Message, PulseSnapshot } from "@ember/protocol";
+import { MENTION_CONTENT_TYPE, mentionContent } from "@ember/richtext/dom";
 import { MainContent } from "@/components/main-content";
 import { PeopleContext, useNameOf } from "@/hooks/use-directory";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -72,12 +73,14 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
   const [project, setProject] = useState<PulseSnapshot | null>(null);
   const [selection, setSelection] = useState<ProjectSelection | null>(null);
   const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft | null>(null);
-  const projectName = project?.project.full_name.toLowerCase();
-  const currentProject = room.kind !== "direct" && projectName &&
-    [projectName.split("/").at(-1), `项目 · ${projectName}`].includes(room.name.toLowerCase()) ? project : null;
+  // The project endpoint has already authenticated this room and resolved its repository binding.
+  const currentProject = projectWorkspace && room.kind !== "direct" ? project : null;
+  const owner = currentProject?.team?.owner;
+  const [mentionOwner, setMentionOwner] = useState(false);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
   const [assistantMessage, setAssistantMessage] = useState<Message | null>(null);
   const people = useContext(PeopleContext);
+  const ownerProfile = owner && people.get(owner.id);
   const assistantBot = currentProject?.business ? [...people.values()].find(person => person.role === "bot" && person.name === "项目助手") : undefined;
   const nextAssistantTurn = useRef(0);
   useEffect(() => {setProject(null); setFeedbackDraft(null); setAssistantTurns([]); setAssistantMessage(null);}, [room.id]);
@@ -139,6 +142,15 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
     .map((t) => t.user)
     .filter((u) => u.id !== me.id);
   const composer = useRef<ComposerHandle>(null);
+  useEffect(() => {
+    if (!mentionOwner || !discussion || !composer.current || !ownerProfile) return;
+    setMentionOwner(false);
+    const attachment = document.createElement("action-text-attachment");
+    attachment.setAttribute("content-type", MENTION_CONTENT_TYPE);
+    attachment.setAttribute("sgid", ownerProfile.id);
+    attachment.setAttribute("content", mentionContent(ownerProfile));
+    composer.current.replace(`<p>${attachment.outerHTML}&nbsp;</p>`, true);
+  }, [mentionOwner, discussion, ownerProfile]);
   const { editing, editors } = useMessageEditors(composer);
   useImperativeHandle(ref, () => ({ focusComposer: editors.returnFocus }), [editors]);
   // A thread that covers the room leaves nothing of it to reach until it's closed.
@@ -178,11 +190,22 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
         {/* Backgrounds run under a landscape phone's notch; the room's contents stay clear of it. */}
         <MainContent className="relative flex min-h-0 min-w-0 flex-col bg-background pr-[env(safe-area-inset-right)] max-md:pl-[env(safe-area-inset-left)]">
           <RoomNotice notice={state.notice} onDismiss={dismissNotice} />
-          <div className={currentProject?.business ? "flex shrink-0 items-center gap-2 border-b bg-surface px-3 py-2" : "contents"}>
+          <div className={currentProject ? "flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-surface px-3 py-2" : "contents"}>
           {currentProject?.business && <nav aria-label="项目工作区" className="flex min-w-0 flex-wrap items-center gap-1">{([["discussion", "项目讨论"], ["overview", "项目总览"], ["assistant", "项目助手"], ["feedback", "反馈与落实"]] as const).map(([value, label]) => <button key={value} aria-current={view === value ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => {if (view !== value) setView(value);}}>{label}</button>)}</nav>}
-          {projectWorkspace && <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>}
+          {projectWorkspace && !direct && <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>}
+          {owner && <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-message-muted">
+            <span>项目负责人</span>
+            {owner.id === me.id || deleted || state.offline
+              ? <span className="font-medium text-message-ink">{owner.name}</span>
+              : <button type="button" className="rounded px-1 py-0.5 font-medium text-message-ink hover:bg-hover" onClick={() => {
+                setMentionOwner(true);
+                if (!discussion) setView("discussion");
+              }}>@{owner.name}</button>}
+            <span>项目问题可以在群里 @ 负责人</span>
+          </div>}
+          {owner === null && <p className="w-full text-xs text-message-muted">原负责人账号已不可用，请用现用账号重新接入项目。</p>}
           </div>
-          {currentProject?.business && view === "overview" && <ProjectBusiness key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
+          {currentProject?.business && view === "overview" && <ProjectBusiness roomId={room.id} key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
           {currentProject?.business && view === "assistant" && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
             reference={assistantMessage?.roomId === room.id ? {
               text: assistantMessage.plainText || "附件",

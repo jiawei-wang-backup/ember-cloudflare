@@ -2,8 +2,9 @@ import { useContext, useState, type ReactNode, type MouseEvent } from "react";
 import type { Me, NavigationSlot } from "@ember/protocol";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PageLink } from "@/components/page-link";
+import { LogOut } from "@/components/icons/iconoir";
 import { useAccount } from "@/hooks/use-account";
-import { NEW_DIRECT_PATH, PROFILE_PATH, SEARCHES_PATH, WORKSPACE_SETTINGS_PATH } from "@/hooks/use-route";
+import { leave, NEW_DIRECT_PATH, PROFILE_PATH, SEARCHES_PATH, WORKSPACE_SETTINGS_PATH } from "@/hooks/use-route";
 import { cn } from "@/lib/utils";
 import { AppearanceMenu } from "./appearance-menu";
 import { NavigationIcon } from "./navigation-icon";
@@ -92,9 +93,23 @@ interface Props {
   onNewDirect: (opener: HTMLElement) => void;
 }
 
-export function ChineseHeaderActions({me, activity, roomBell}: {me: Me; activity: Activity; roomBell?: ReactNode}) {
+export function ChineseHeaderActions({me, activity, roomBell, onSignOut}: {
+  me: Me; activity: Activity; roomBell?: ReactNode; onSignOut: () => Promise<boolean>;
+}) {
   const [notifications, setNotifications] = useState(false);
   const [account, setAccount] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutFailed, setSignOutFailed] = useState(false);
+  const signOut = () => leave(async () => {
+    setSigningOut(true);
+    setSignOutFailed(false);
+    const signedOut = await onSignOut();
+    if (!signedOut) {
+      setSigningOut(false);
+      setSignOutFailed(true);
+    }
+    return signedOut;
+  });
   const entry = "block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-hover";
   return <div className="ml-auto flex shrink-0 items-center gap-1">
     <Popover open={notifications} onOpenChange={setNotifications}>
@@ -115,6 +130,13 @@ export function ChineseHeaderActions({me, activity, roomBell}: {me: Me; activity
         <PageLink className={entry} href={PROFILE_PATH} onClick={() => setAccount(false)}>个人资料</PageLink>
         <PageLink className={entry} href={WORKSPACE_SETTINGS_PATH} onClick={() => setAccount(false)}>{me.administrator ? "管理" : "工作区设置"}</PageLink>
         <div className="flex items-center justify-between border-t px-3 py-1 text-sm">外观<AppearanceMenu/></div>
+        <div className="border-t pt-1">
+          <button type="button" disabled={signingOut} onClick={signOut} className={cn(entry, "flex items-center gap-2 disabled:opacity-50")}>
+            <LogOut aria-hidden="true" className="size-4" />
+            {signingOut ? "正在退出…" : "退出登录"}
+          </button>
+          {signOutFailed && <p role="alert" className="px-3 py-1 text-xs">退出失败，请重试。</p>}
+        </div>
       </PopoverContent>
     </Popover>
   </div>;

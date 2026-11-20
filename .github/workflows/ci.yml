@@ -14,7 +14,7 @@ permissions:
 # Both jobs run for the Chinese integration branch in this fork.
 jobs:
   check:
-    if: github.repository == 'jiawei-wang-dev/ember-cloudflare'
+    if: github.repository == 'jiawei-wang-backup/ember-cloudflare'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -54,7 +54,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    if: github.repository == 'jiawei-wang-dev/ember-cloudflare'
+    if: github.repository == 'jiawei-wang-backup/ember-cloudflare'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

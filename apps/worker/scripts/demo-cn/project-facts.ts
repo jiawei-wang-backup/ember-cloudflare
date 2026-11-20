@@ -48,6 +48,7 @@ export function factsReply(data: PulseSnapshot, roomId: string, question: string
     return html`<p>${done.length ? "已上报完成 " + done.length + " 项，包括" + done.slice(-3).map(m => label(m.title)).join("、") + "。" : "暂时没有已完成的阶段记录。"}</p>${source}`.body;
   }
   const asksGaps = /还差|缺少|卡点|阻塞|验收|风险|延期/.test(question);
+  const feedback = pending.find(stage => stage.ember_message_id && /^[a-z0-9]{16}$/.test(stage.ember_message_id));
   const asksStatus = /进度|怎么样|做到|做完|完成|速览|现状|里程碑|周报|整体/.test(question);
   if (!asksGaps && !asksStatus) {
     return html`<p>你想先了解哪一块？可以问我项目做什么、现在到哪了、卡在哪儿，或者已经做完了什么。</p>${source}`.body;
@@ -58,6 +59,7 @@ export function factsReply(data: PulseSnapshot, roomId: string, question: string
   return html`${/验收/.test(question) ? html`<p><strong>上报进度</strong> ${progressText}</p>` : ""}
     ${!asksGaps || asksStatus ? html`<p><strong>做到哪了</strong> ${progressText}${doneText ? " 已完成：" + doneText + "。" : ""}</p>` : ""}
     <p><strong>还差哪几步</strong> ${blocked}${gapText}。</p>
+    ${asksGaps && feedback?.ember_message_id ? html`<p>${feedback.evidence ?? ""} <a href="${href}/@${feedback.ember_message_id}">查看原讨论</a></p>` : ""}
     ${/验收/.test(question) ? html`<p>项目进度由客户端 Codex 自动上报。</p>` : ""}
     ${source}`.body;
 }

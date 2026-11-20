@@ -10,8 +10,9 @@ function milestoneDone({state}: Pick<BusinessMilestone, "state">) {
   return state === "completed" || state === "accepted";
 }
 
-function MilestonePipeline({stages, onFeedback}: {
-  stages: Array<Pick<BusinessMilestone, "title" | "state"> & {evidence?: string | null; sourceTitle?: string}>;
+function MilestonePipeline({stages, roomId, onFeedback}: {
+  roomId?: string;
+  stages: Array<Pick<BusinessMilestone, "title" | "state"> & {evidence?: string | null; sourceTitle?: string; ember_message_id?: string}>;
   onFeedback?: (index: number) => void;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
@@ -36,6 +37,7 @@ function MilestonePipeline({stages, onFeedback}: {
     {stage && <div id={detailId} className="mt-2 space-y-2 rounded-lg border bg-surface p-3 text-xs">
       {stage.sourceTitle && <p className="font-medium">原始记录：{stage.sourceTitle}</p>}
       <p className="whitespace-pre-wrap break-words">{stage.evidence || "暂无详细记录"}</p>
+      {roomId && stage.ember_message_id && /^[a-z0-9]{16}$/.test(stage.ember_message_id) && <a className="text-link hover:underline" href={`/rooms/${encodeURIComponent(roomId)}/@${stage.ember_message_id}`}>查看原讨论</a>}
       {onFeedback && selected !== null && <button className="text-link hover:underline" onClick={() => onFeedback(selected)}>提出里程碑反馈</button>}
     </div>}
   </div>;
@@ -87,7 +89,8 @@ function BusinessModuleTile({module, onFeedback}: {
   </Dialog>;
 }
 
-export function ProjectBusiness({data, onFeedback, onDiscussion}: {
+export function ProjectBusiness({roomId, data, onFeedback, onDiscussion}: {
+  roomId?: string;
   data: PulseSnapshot;
   onFeedback: (moduleId: string, milestoneId?: string) => void;
   onDiscussion: () => void;
@@ -118,7 +121,7 @@ export function ProjectBusiness({data, onFeedback, onDiscussion}: {
           <h2 className="text-base font-semibold">项目里程碑进度</h2>
           {progress && progress.total > 0 && <span className="text-sm tabular-nums text-message-muted">已做完 {completed}/{progress.total}{completed < progress.total && ` · 还差 ${progress.total - completed} 项`}</span>}
         </div>
-        <MilestonePipeline stages={projectStages}/>
+        <MilestonePipeline roomId={roomId} stages={projectStages}/>
       </section>
       <section className="rounded-xl border bg-card p-4">
         <div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-semibold">项目背景</h2><PulseStatusBadge value={data.project.status}/></div>

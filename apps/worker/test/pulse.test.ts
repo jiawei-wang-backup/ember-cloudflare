@@ -20,7 +20,7 @@ it("checks sign-in, membership and explicit project grant before fetching",async
 it("only fetches the bound UUID, returns no secrets, refuses redirects or mismatched projects",async()=>{
   const ada=await signIn("Ada"),room=await createRoom("Pulse",{as:ada});
   const bindings={PULSE_URL:"https://pulse.example",PULSE_TOKEN:"service-secret",PULSE_ROOMS:JSON.stringify({[room.id]:{projectId,memberIds:[ada.user.id]}})};
-  const fetch=vi.spyOn(globalThis,"fetch").mockResolvedValue(Response.json({project:{repository_id:projectId},usage:{input_tokens:"9",cached_input_tokens:"8",output_tokens:"1"}}));
+  const fetch=vi.spyOn(globalThis,"fetch").mockResolvedValue(Response.json({project:{repository_id:projectId,full_name:"example/pulse",status:"unknown"},milestones:[],usage:{input_tokens:"9",cached_input_tokens:"8",output_tokens:"1"}}));
   const response=await apiWith(bindings,`/api/rooms/${room.id}/project?days=30&projectId=other`,{headers:{Cookie:ada.cookie}});
   expect(response.status).toBe(200);
   expect(await response.text()).not.toContain("service-secret");
@@ -48,7 +48,7 @@ it("blocks an agent answer when another room reader lacks project permission",as
 it("runs a project usage tool against scoped structured data",async()=>{
   const ada=await signIn("Ada"),room=await createRoom("Pulse",{as:ada,closedTo:[ada.user.id]});
   const bindings={...runtimeEnv,PULSE_URL:"https://pulse.example",PULSE_TOKEN:"secret",PULSE_ROOMS:JSON.stringify({[room.id]:{projectId,memberIds:[ada.user.id]}})} as unknown as Env;
-  vi.spyOn(globalThis,"fetch").mockResolvedValue(Response.json({project:{repository_id:projectId},usage:{input_tokens:"100",cached_input_tokens:"90",output_tokens:"5"},models:[],cost:{amount:null},fetched_at:"2026-11-16",source:"test fixture",window:{days:7},caveats:[]}));
+  vi.spyOn(globalThis,"fetch").mockResolvedValue(Response.json({project:{repository_id:projectId,full_name:"example/pulse",status:"unknown"},milestones:[],usage:{input_tokens:"100",cached_input_tokens:"90",output_tokens:"5"},models:[],cost:{amount:null},fetched_at:"2026-11-16",source:"test fixture",window:{days:7},caveats:[]}));
   const tool=projectTools(bindings,room.id,ada.user.id).find(t=>t.name==="get_project_usage")!;
   const answer=JSON.parse((await tool.run({days:7,projectId:"other"})).text);
   expect(answer.project_id).toBe(projectId);

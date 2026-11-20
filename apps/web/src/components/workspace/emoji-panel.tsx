@@ -46,7 +46,7 @@ function KeepSkinTone() {
 export default function EmojiPanel({ onPick }: { onPick: (emoji: string) => void }) {
   const [skinTone] = useState(keptSkinTone);
   return (
-    <EmojiPicker className="h-[min(380px,60dvh)]" columns={9} skinTone={skinTone} emojibaseUrl={EMOJIBASE_URL} onEmojiSelect={({ emoji }) => onPick(emoji)}>
+    <EmojiPicker locale={import.meta.env.MODE === "demo-cn" ? "zh" : "en"} className="h-[min(380px,60dvh)]" columns={9} skinTone={skinTone} emojibaseUrl={EMOJIBASE_URL} onEmojiSelect={({ emoji }) => onPick(emoji)}>
       <EmojiPickerSearch placeholder="Search all emoji" aria-label="Search all emoji" autoFocus />
       <EmojiPickerContent />
       <EmojiPickerFooter>

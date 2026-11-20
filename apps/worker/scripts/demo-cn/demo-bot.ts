@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { state } from "./local.ts";
 
+export const DEMO_ASSISTANT_NAME = "协作演示助手";
+
 export function callbackToken(): string {
   const file = path.join(state, "callback-token");
   if (!existsSync(file)) writeFileSync(file, randomBytes(24).toString("hex"), { flag: "wx", mode: 0o600 });

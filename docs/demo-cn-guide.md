@@ -123,7 +123,7 @@ SVG 是明确标注的布局示意图，不冒充真实应用截图。PNG 和视
 
 ## Bot 测试
 
-管理员在 Admin 的 Chat bots 页面可查看 **GitHub Bot · 演示** 及交付频道的原生 Slack Webhook 地址。
+管理员在 Admin 的 Chat bots 页面可查看 **协作演示助手** 及交付频道的原生 Slack Webhook 地址。
 可复制该**本地**地址，按下面格式发送一条新通知；不需要配置真实 GitHub：
 
 ```sh

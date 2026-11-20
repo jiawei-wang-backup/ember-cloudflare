@@ -81,7 +81,7 @@ async function main() {
     ["六项目阶段汇总", projects.map(p => `${p.name}：${p.progress}`).join("；"), "设计组件库只在约定的 1.0 范围完成；内容策略中台仍在筹备。", "其余项目必须区分开发、测试和业务验收，进度仅为背景模拟。"],
     ["消息幂等与可观测性", "状态恢复使用 revision，重复事件使用 eventId，两者不能互相替代。", "建议保留请求 traceId，在日志与告警中串起同一次请求。", "错误重试要有总预算，避免弱网下请求放大。"],
     ["回归缺陷闭环", "状态重连、字幕漂移、中文输入法三个问题均已建立场景。", "请把修复和回归结论写进各自 Thread，未测设备继续列出。", "代表性检索词：revision、Token、PR128、状态同步。"],
-    ["研发事件与验收边界", "本频道的 GitHub Bot 通过 Ember 原生 Slack Webhook 发出结构化卡片。", "模拟 PR 合并不代表业务验收，测试环境部署不代表生产上线。", "卡片按钮只跳转到真实本地讨论，绝不假装审批成功。"],
+    ["研发事件与验收边界", "协作演示助手通过 Ember 原生 Slack Webhook 发出结构化卡片。", "模拟 PR 合并不代表业务验收，测试环境部署不代表生产上线。", "卡片按钮只跳转到真实本地讨论，绝不假装审批成功。"],
   ];
   for (const [i, [name, description]] of channels.entries()) {
     const room = new Conversation(ember, roomIds[name]!);
@@ -125,7 +125,8 @@ async function main() {
     const message = await ember.upload(admin, roomId, item.file, item.preview);
     uploaded.push({ roomId, message, name: item.file.name, type: item.file.type }); messages++;
   }
-  const bot = await ember.createBot(admin, "GitHub Bot · 演示", avatar(4));
+  const { added, bot } = await enrichDemo(ember, sessions, roomIds);
+  messages += added;
   const deliveries = new Conversation(ember, roomIds["交付与验收"]!);
   try {
     await deliveries.watch(admin);
@@ -155,7 +156,6 @@ async function main() {
     }
   } finally { deliveries.close(); }
   messages += await addProjectCards(ember, admin, bot, roomIds);
-  messages += await enrichDemo(ember, sessions, roomIds);
   await ember.star(admin, roomIds["交付与验收"]!);
   await ember.star(admin, roomIds["直播监控平台"]!);
   await ember.dismissInvitation(admin);

@@ -1,6 +1,6 @@
 export interface PulseUsage { input_tokens: string | null; cached_input_tokens: string | null; output_tokens: string | null }
 export interface PulseIntroduction { background: string; pains: string[]; value: string }
-export interface PulseTeam { people: number; bots: number; members: Array<{id: string; name: string; bot: boolean}> }
+export interface PulseTeam { people: number; bots: number; owner?: {id: string; name: string} | null; members: Array<{id: string; name: string; bot: boolean}> }
 export interface PulseMessageFilter { author?: string; kind?: "all" | "bot" | "me"; since?: string; until?: string; before?: string }
 export interface PulseMessagePage { messages: import("./index.ts").Message[]; before: string | null; hasMore: boolean }
 export interface PulseProjectSummary { roomId: string; name: string; progress: PulseSnapshot["milestone_progress"]; freshness?: PulseSnapshot["freshness"] }
@@ -43,7 +43,7 @@ export interface PulseSnapshot {
   members: Array<{developer_id: string | null; display_name: string; role: string; last_activity_at: string; sessions: number; usage: PulseUsage | null}>;
   models: Array<PulseUsage & {provider: string | null; model: string | null}>;
   pulls: Array<{number: string; title: string; url: string; state: string; updated_at: string; repository_full_name?: string; is_draft?: boolean}>;
-  milestones: Array<{title: string; state: string; due_on: string | null; evidence?: string}>;
+  milestones: Array<{title: string; state: string; due_on: string | null; ember_message_id?: string; evidence?: string}>;
   milestone_progress: {accepted: number; completed?: number; total: number; percent: number; basis?: "reported" | "accepted"} | null;
   activities: Array<{display_name: string; title: string | null; summary: string | null; last_activity_at: string}>;
   latest_report: unknown; observation: unknown;

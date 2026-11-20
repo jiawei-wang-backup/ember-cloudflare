@@ -4,7 +4,7 @@ import { Conversation, RoomSocket, type Ember, type Session } from "../seed/clie
 import { codeBlock, html, linkWithPreview, mention } from "../seed/markup.ts";
 import { projects } from "./data.ts";
 import { avatar, original, textFile } from "./files.ts";
-import { callbackToken, interactiveCard } from "./demo-bot.ts";
+import { callbackToken, DEMO_ASSISTANT_NAME, interactiveCard } from "./demo-bot.ts";
 import { roomHistory } from "./project-cards.ts";
 
 function picture(index: number, user?: object): FormData {
@@ -20,17 +20,8 @@ export async function enrichDemo(ember: Ember, sessions: Session[], rooms: Recor
   const admin = sessions[0]!;
   for (let i = 0; i < sessions.length; i++) await ember.request(AVATAR_PATH, { method: "PUT", session: sessions[i], body: picture(i) });
   const list = await (await ember.request("/api/account/bots", { session: admin })).json() as Bots;
-  const github = list.bots.find(bot => bot.name === "GitHub Bot · 演示");
-  if (github) {
-    const file = original("deploy-bot.png", "image/png");
-    const form = new FormData();
-    const blob = new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: file.type });
-    form.set("user", JSON.stringify({ name: github.name }));
-    form.set("avatar", blob, file.name); form.set("variant", blob, file.name);
-    await ember.request(`/api/account/bots/${github.id}`, { method: "PATCH", session: admin, body: form });
-  }
-  const existing = list.bots.find(bot => bot.name === "协作演示助手");
-  const fields = { name: "协作演示助手", webhookUrl: `${ember.origin}/__demo_cn_bot/${callbackToken()}` };
+  const existing = list.bots.find(bot => bot.name === DEMO_ASSISTANT_NAME);
+  const fields = { name: DEMO_ASSISTANT_NAME, webhookUrl: `${ember.origin}/__demo_cn_bot/${callbackToken()}` };
   const { bot } = await (await ember.request(existing ? `/api/account/bots/${existing.id}` : "/api/account/bots", {
     method: existing ? "PATCH" : "POST", session: admin, body: picture(9, fields), expected: existing ? [200] : [201],
   })).json() as BotAnswer;
@@ -104,5 +95,5 @@ export async function enrichDemo(ember: Ember, sessions: Session[], rooms: Recor
     await ember.upload(sessions[5]!, designId, original("brand-guide.pdf", "application/pdf", "通用品牌规范-原项目演示素材.pdf")); added++;
   }
   console.log(`增强完成：九位成员人物头像、六项目线程清单、频道图标、PDF 与图片、链接预览、收藏/提及偏好和可交互 Bot；新增 ${added} 条持久化消息。`);
-  return added;
+  return { added, bot };
 }

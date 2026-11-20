@@ -152,7 +152,7 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
   const {input_tokens: input, output_tokens: output} = data.usage;
   const totalTokens = input == null || output == null ? null : (BigInt(input) + BigInt(output)).toString();
   const monitorUrl = monitorProjectUrl(data);
-  if (compact && data.business) return <Dialog open={expanded} onOpenChange={setExpanded}>
+  if (compact) return <Dialog open={expanded} onOpenChange={setExpanded}>
     <div className="ml-auto flex shrink-0 items-center gap-1.5">
       {monitorUrl && <a href={monitorUrl} target="_blank" rel="noreferrer" className="whitespace-nowrap rounded-md px-2 py-1.5 text-xs text-message-muted hover:bg-hover hover:text-message-ink">监控面板 ↗</a>}
     <button className="shrink-0 whitespace-nowrap rounded-md border bg-card px-2.5 py-1.5 text-xs hover:bg-hover" onClick={() => setExpanded(true)}>项目统计</button>

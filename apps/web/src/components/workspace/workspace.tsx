@@ -928,7 +928,7 @@ export function Workspace({ me, workspaceName, onAccountChanged, onSignOut, onSe
           {/* The page, placed in the grid as if it were its own, with nothing of it to reach while the huddle opened covers it. */}
           <div className="contents" inert={huddle?.open === true}>
             <WorkspaceHeaderActions value={workspaceName === "Project Pulse · 研发协作中心" ? roomBell =>
-            <ChineseHeaderActions me={me} roomBell={roomBell} activity={{...activity, onToggle: () => {
+            <ChineseHeaderActions me={me} roomBell={roomBell} onSignOut={onSignOut} activity={{...activity, onToggle: () => {
               activity.onToggle();
               if (matchMedia(DRAWER_LAYOUT).matches) afterNavigating(() => setDrawerOpen(true));
             }}}/> : null}>

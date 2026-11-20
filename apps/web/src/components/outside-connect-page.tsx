@@ -49,7 +49,7 @@ export function OutsideConnectPage({ me, workspace }: Props) {
   const [asked, setAsked] = useState<OutsideAsked | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [answering, setAnswering] = useState(false);
-  /** What the app asks for that you've chosen to leave out, which starts as your direct messages and private rooms, until you tick them. */
+  /** Scopes left unchecked on the consent page. */
   const [without, setWithout] = useState<OutsideScope[]>(() => [...UNTICKED_OUTSIDE_SCOPES]);
   const mounted = useMounted();
   useTitle("Connect an AI app");
@@ -57,7 +57,17 @@ export function OutsideConnectPage({ me, workspace }: Props) {
   useEffect(() => {
     let stopped = false;
     describeOutsideAsk(ask).then(
-      (asked) => !stopped && setAsked(asked),
+      (asked) => {
+        if (stopped) return;
+        if (import.meta.env.MODE === "demo-cn" &&
+            asked.workspace === "Project Pulse · 研发协作中心" &&
+            asked.name === "Codex（Ember 中文局域网）" &&
+            /^127\.0\.0\.1:\d+$/.test(asked.comesBackTo) &&
+            asked.scopes.includes("create_project_channels")) {
+          setWithout([]);
+        }
+        setAsked(asked);
+      },
       (error: unknown) => !stopped && setProblem(problemOf(error)),
     );
     return () => void (stopped = true);

@@ -1137,6 +1137,10 @@ it("uses a Chinese project title and reuses the registered room in the LAN works
     const first = await called(token, "create_project_channel", {repository, project_name: "校园政策问答"});
     expect(first.isError).toBeFalsy();
     expect(JSON.parse(first.text).room.name).toBe("校园政策问答（monashmate）");
+    const roomId = JSON.parse(first.text).room.id;
+    expect((await workspaceStub().teamProjectBindings([roomId]))[roomId]).toEqual({
+      repository: "example/monashmate", ownerId: member.user.id,
+    });
     expect((await called(token, "create_project_channel", {repository})).text).toEqual(first.text);
     expect((await called(token, "create_project_channel", {repository, project_name: "校园知识库"})).text).toEqual(first.text);
   } finally {

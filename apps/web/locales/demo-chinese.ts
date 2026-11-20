@@ -10,7 +10,7 @@ function isLabel(node: ts.Node): boolean {
     const key = parent.name.getText();
     const group = parent.parent.parent;
     return labelFields.has(key) || key.endsWith("Label") || key === "link" ||
-      (ts.isVariableDeclaration(group) && /_LABELS$/.test(group.name.getText()));
+      (ts.isVariableDeclaration(group) && /(?:_LABELS$|^FORMATTING_NAMES$)/.test(group.name.getText()));
   }
   if (ts.isJsxExpression(parent)) return !ts.isJsxAttribute(parent.parent) || labelFields.has(parent.parent.name.getText());
   if (ts.isConditionalExpression(parent)) return parent.condition !== node;
@@ -27,7 +27,7 @@ export function demoChinese(): Plugin {
     apply:(_, env) => env.mode === "demo-cn",
     transformIndexHtml: html => html.replace('lang="en"', 'lang="zh-CN"'),
     transform(source,id) {
-      if (!id.includes("/apps/web/src/") || (!id.endsWith(".tsx") && !id.endsWith("/lib/involvement.ts"))) return;
+      if (!id.includes("/apps/web/src/") || (!id.endsWith(".tsx") && !id.endsWith("/lib/involvement.ts") && !id.endsWith("/lib/formatting.ts"))) return;
       const file = ts.createSourceFile(id,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
       const changes: Array<{start:number; end:number; value:string}> = [];
       function visit(node: ts.Node) {

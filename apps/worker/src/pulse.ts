@@ -66,9 +66,9 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   const settings = isRoomId(roomId) && await workspace(env).roomSettings(credentials, roomId);
   if (!settings || settings === "not found") return Response.json({error:"频道不可访问"},{status:404,headers});
   const explicit = pulseBinding(env, roomId);
-  const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true" && !explicit && settings.room.channelGroup === "project"
-    ? (await workspace(env).teamProjectKeys([roomId]))[roomId] : undefined;
-  const sharedKey = teamProjectKey(env, settings.room, registered);
+  const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true" && settings.room.kind === "closed"
+    ? (await workspace(env).teamProjectBindings([roomId]))[roomId] : undefined;
+  const sharedKey = teamProjectKey(env, settings.room, registered?.repository);
   const binding = explicit ?? (sharedKey ? {
     projectId: sharedKey, memberIds: settings.people.filter(person => person.member).map(person => person.id)
   } : null);
@@ -82,7 +82,9 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
     const data = await pulseSnapshot(env,binding.projectId,days,background,new URL(request.url).searchParams.get("refresh") === "1");
     const directory = await workspace(env).directory(credentials);
     const members = settings.people.filter(p => p.member).map(person => ({id: person.id, name: person.name, bot: directory?.find(p => p.id === person.id)?.role === "bot"}));
-    return Response.json({...data, business: businessOverview(data), can_adopt: settings.canAdminister, introduction: pulseIntroduction(binding.projectId), team: {people: members.filter(p => !p.bot).length, bots: members.filter(p => p.bot).length, members}}, {headers});
+    const ownerId = registered?.ownerId ?? (sharedKey ? settings.creatorId : undefined);
+    const owner = members.find(member => member.id === ownerId && !member.bot);
+    return Response.json({...data, business: businessOverview(data), can_adopt: settings.canAdminister, introduction: pulseIntroduction(binding.projectId), team: {people: members.filter(p => !p.bot).length, bots: members.filter(p => p.bot).length, members, ...(registered && {owner: owner ? {id: owner.id, name: owner.name} : null})}}, {headers});
   }
   catch (error) { console.error("Project Pulse unavailable:",error instanceof Error?error.message:"unknown"); return Response.json({error:"Project Pulse 暂不可用，请稍后重试"},{status:502,headers}); }
 }
@@ -94,12 +96,12 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
   const [user, sidebar] = await Promise.all([workspace(env).authenticate(credentials), workspace(env).sidebar(credentials)]);
   if (!user || !sidebar) return Response.json({error: "未登录"}, {status: 401, headers});
   const teamKeys = env.PULSE_TEAM_PROJECT_CHANNELS === "true"
-    ? await workspace(env).teamProjectKeys(sidebar.rooms.filter(room => room.kind === "closed" && room.channelGroup === "project").map(room => room.id))
+    ? await workspace(env).teamProjectBindings(sidebar.rooms.filter(room => room.kind === "closed" && room.channelGroup === "project").map(room => room.id))
     : {};
   const rooms = sidebar.rooms.flatMap(room => {
     if (room.kind === "direct") return [];
     const binding = pulseBinding(env, room.id);
-    const projectId = binding ? (binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]);
+    const projectId = binding ? (binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]?.repository);
     return projectId ? [{room, projectId}] : [];
   });
   const results = await Promise.all(rooms.map(async ({room, projectId}) => {

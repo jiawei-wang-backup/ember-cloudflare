@@ -56,6 +56,7 @@ const described = () => Response.json(CLAUDE);
 const problem = (status: number, error: string) => () => Response.json({ error }, { status });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.mocked(loadPage).mockClear();
   sessionStorage.clear();
@@ -63,6 +64,39 @@ afterEach(() => {
 });
 
 describe("The page that asks whether to connect an AI app", () => {
+  it("preselects the Codex LAN onboarding permissions and waits for consent", async () => {
+    vi.stubEnv("MODE", "demo-cn");
+    const onboarding: OutsideAsked = {
+      name: "Codex（Ember 中文局域网）",
+      comesBackTo: "127.0.0.1:57979",
+      workspace: "Project Pulse · 研发协作中心",
+      scopes: ["read", "write", "private", "create_project_channels"],
+    };
+    const query = new URLSearchParams(new URL(REQUEST, BACK).search);
+    query.set("redirect_uri", "http://127.0.0.1:57979/callback");
+    query.set("scope", onboarding.scopes.join(" "));
+    const sent = serve({
+      "POST /api/outside/asks": () => Response.json(onboarding),
+      "POST /api/outside/answers": () => Response.json({ redirectTo: ALLOWED }),
+    });
+    const user = open(`/oauth/authorize?${query}`);
+    await screen.findByRole("button", { name: "Allow" });
+
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(3);
+    for (const box of boxes) expect(box).toBeChecked();
+    expect(sent).toHaveLength(1);
+    await user.click(screen.getByRole("checkbox", { name: OUTSIDE_SCOPE_EXPLAINED.private }));
+    await user.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(loadPage).toHaveBeenCalledOnce());
+    expect(sent[1]).toEqual(["POST /api/outside/answers", {
+      ask: { ...ASK, redirectUri: query.get("redirect_uri"), scope: query.get("scope") },
+      allow: true,
+      without: ["private"],
+      with: ["write", "create_project_channels"],
+    }]);
+  });
+
   it("asks Ember about the request in its address, and says which app asks, as whom, what it could do, and where the browser goes back", async () => {
     const sent = serve({ "POST /api/outside/asks": described });
     open();

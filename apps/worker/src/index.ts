@@ -953,7 +953,9 @@ async function roomSettings(request: Request, env: Env, roomId: RoomId): Promise
   const credentials = await credentialsOf(request, env);
   const settings = credentials && (await workspace(env).roomSettings(credentials, roomId));
   if (!settings) return problem(401, "Not signed in");
-  return settings === "not found" ? problem(404, ROOM_NOT_FOUND) : json(settings satisfies RoomSettings);
+  if (settings === "not found") return problem(404, ROOM_NOT_FOUND);
+  const { creatorId: _creatorId, ...publicSettings } = settings;
+  return json(publicSettings satisfies RoomSettings);
 }
 
 /**
@@ -1382,6 +1384,20 @@ export default {
   // Everything but the built app's static files comes here first (`run_worker_first`), page loads
   // included, so each answer gets the headers in headers.ts.
   async fetch(request, env, ctx?: ExecutionContext): Promise<Response> {
+    // Local Wrangler receives HTTP from the TLS-terminating LAN proxy.
+    const proxyKey = env.EMBER_LAN_TLS_PROXY_KEY;
+    if (proxyKey && request.headers.get("x-ember-lan-tls") === proxyKey) {
+      const url = new URL(request.url);
+      url.protocol = "https:";
+      request = new Request(url, request);
+      for (const [forwarded, name] of [["x-ember-lan-origin", "Origin"], ["x-ember-lan-site", "Sec-Fetch-Site"]] as const) {
+        const value = request.headers.get(forwarded);
+        if (value) request.headers.set(name, name === "Origin" ? decodeURIComponent(value) : value);
+        else request.headers.delete(name);
+        request.headers.delete(forwarded);
+      }
+      request.headers.delete("x-ember-lan-tls");
+    }
     if (!isHttps(request) && requiresHttps(request, env)) return redirectToHttps(request);
     const { pathname } = urlOf(request);
     // /up skips Campfire's before-actions, being Rails' health check, so it's never checked and carries
