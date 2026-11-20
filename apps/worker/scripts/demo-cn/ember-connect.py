@@ -110,12 +110,12 @@ def connect(include_private=False, include_write=False, create_projects=False, o
     save(client, tokens)
 
 
-def mcp(message, protocol=None):
+def mcp(message, protocol=None, *, refresh=True):
     current = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
     try:
         return request("/mcp", message, token=current["access_token"], protocol=protocol)
     except HTTPError as error:
-        if error.code != 401:
+        if error.code != 401 or not refresh:
             raise
     client = current["client_id"]
     tokens = request("/oauth/token", {"grant_type": "refresh_token", "client_id": client,
@@ -124,9 +124,9 @@ def mcp(message, protocol=None):
     return request("/mcp", message, token=tokens["access_token"], protocol=protocol)
 
 
-def call_tool(name, arguments):
+def call_tool(name, arguments, *, refresh=True):
     reply = mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                 "params": {"name": name, "arguments": arguments}}, "2025-06-18")
+                 "params": {"name": name, "arguments": arguments}}, "2025-06-18", refresh=refresh)
     result = reply.get("result", {})
     if not result or result.get("isError"):
         raise ValueError("Ember 拒绝操作，请检查网页授权和频道权限")

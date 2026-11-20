@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import shutil
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from threading import Event, Thread
 from datetime import datetime, timezone
 from urllib.error import URLError
 from urllib.parse import quote
@@ -239,6 +241,41 @@ def answer(message, context):
     return body
 
 
+@contextmanager
+def thinking_status(room, mention_id):
+    stopped = Event()
+
+    def update(thinking):
+        return CONNECTOR.call_tool("set_codex_thinking", {
+            "room_id": room, "mention_id": mention_id, "thinking": thinking,
+        }, refresh=False)["shown"]
+
+    def heartbeat():
+        errors = (OSError, ValueError, KeyError, StopIteration)
+        shown = False
+        try:
+            while not stopped.is_set():
+                if not update(True):
+                    break
+                shown = True
+                stopped.wait(3)
+        except errors:
+            # Older Ember servers may not support this optional status.
+            return
+        finally:
+            if shown:
+                try:
+                    update(False)
+                except errors:
+                    pass
+
+    Thread(target=heartbeat, daemon=True).start()
+    try:
+        yield
+    finally:
+        stopped.set()
+
+
 def run():
     since = datetime.now(timezone.utc)
     handled = set()
@@ -261,15 +298,16 @@ def run():
                             continue
                         if datetime.fromisoformat(msg["at"].replace("Z", "+00:00")) < since:
                             continue
-                        try:
-                            context, allowed = uploaded_context(project)
-                            reply, state = continuing_reply(project, msg, context, allowed, room, time.time())
-                        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-                            state = None
-                            reply = "暂时无法核验该项目已上传的会话资料，请稍后再问。"
-                        # Ember uses the mention ID to suppress retries from the same member.
-                        CONNECTOR.call_tool("send_message", {"room_id": room, "mention_id": msg["id"],
-                                                           "text": "本机 Codex 代答｜" + reply})
+                        with thinking_status(room, msg["id"]):
+                            try:
+                                context, allowed = uploaded_context(project)
+                                reply, state = continuing_reply(project, msg, context, allowed, room, time.time())
+                            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                                state = None
+                                reply = "暂时无法核验该项目已上传的会话资料，请稍后再问。"
+                            # Ember uses the mention ID to suppress retries from the same member.
+                            CONNECTOR.call_tool("send_message", {"room_id": room, "mention_id": msg["id"],
+                                                               "text": "本机 Codex 代答｜" + reply})
                         handled.add(msg["id"])
                         if state:
                             state[1]["last_answer"] = time.time()

@@ -1670,7 +1670,7 @@ export type ServerFrame =
    * Someone started or stopped typing: in the room's composer, or, with `threadId`, in that thread, where
    * only @ember types, as it answers there.
    */
-  | { type: "typing"; user: User; typing: boolean; threadId?: string }
+  | { type: "typing"; user: User; typing: boolean; threadId?: string; codexMentionId?: string }
   /** Answers history.before: the page before `before`, oldest first, and whether there are older ones still. */
   | { type: "history"; before: string; messages: Message[]; hasMore: boolean }
   /** Answers history.after: the page after `after`, oldest first, and whether there are newer ones still. */

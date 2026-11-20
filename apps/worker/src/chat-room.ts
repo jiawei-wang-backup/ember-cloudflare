@@ -734,7 +734,23 @@ export class ChatRoom extends DurableObject<Env> {
       if (inThread === null) return MESSAGE_GONE;
       const body = await this.prepare(markup);
       if (typeof body === "string") return body;
-      return this.create(store, user, clientMessageId, body, new Date().toISOString(), { kind: "reply", inThread });
+      const reply = await this.create(store, user, clientMessageId, body, new Date().toISOString(), { kind: "reply", inThread });
+      if (mentionId && this.env.PULSE_TEAM_PROJECT_CHANNELS === "true")
+        this.broadcast({ type: "typing", user, typing: false, codexMentionId: mentionId });
+      return reply;
+    });
+  }
+
+  async outsideCodexThinking(roomId: RoomId, { user, tags, authorizedAt }: OutsideSender, mentionId: string, thinking: boolean): Promise<boolean> {
+    return this.serially(async () => {
+      if (await this.revocationsFor(roomId).refuse(tags, authorizedAt)) return false;
+      const store = this.storeFor(roomId);
+      const mentioned = await store.find(mentionId);
+      if (!mentioned || mentioned.deleted || mentioned.creator.id === user.id ||
+          !mentioned.mentions.some(person => person.id === user.id)) return false;
+      if (thinking && (await store.storedClientMessageIds(user, ["member-codex-" + mentionId])).length) return false;
+      this.broadcast({ type: "typing", user, typing: thinking, codexMentionId: mentionId });
+      return true;
     });
   }
 

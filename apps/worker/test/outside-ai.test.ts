@@ -20,7 +20,7 @@ import type { Env } from "../src/env";
 import { MAX_SHOWN_LENGTH, MESSAGES_FOUND, SENDING_TOO_FAST } from "../src/outside/tools";
 import { SearchIndex } from "../src/search-index";
 import { MAX_OUTSIDE_CLIENTS, OUTSIDE_SENDS_PER_MINUTE } from "../src/workspace";
-import { api, connect, cookieOf, createRoom, direct, freshDeploy, origin, post, roomSql, settle, shown, signIn, upload, workspaceSql, workspaceStub, type Session, type Socket } from "./support";
+import { api, connect, cookieOf, createRoom, direct, freshDeploy, origin, post, roomSql, roomStub, settle, shown, signIn, upload, workspaceSql, workspaceStub, type Session, type Socket } from "./support";
 
 // Outside AI: an AI app connects to Ember over the Model Context Protocol, at `/mcp`, and signs in
 // with OAuth, where Ember is the authorization server. The tests are the app: they find out how to sign
@@ -1160,8 +1160,17 @@ it("shows a structured mention to its recipient and posts only one visible Codex
       mentions_you: true, mention_from_id: administrator.user.id, mention_recipient_id: member.user.id,
     });
     expect(await refusal(token, "send_message", {room_id: room.id, mention_id: ordinary.id, text: "Unsolicited"})).toBe("That message no longer exists");
+    const roomObject = roomStub(room.id);
+    const sender = await workspaceStub().outsideSender({ userId: member.user.id, scopes: ["read", "write"] }, room.id, true);
+    if (!sender || sender === "limited") throw new Error("Test member cannot send to the room");
+    expect(await roomObject.outsideCodexThinking(room.id, sender, ordinary.id, true)).toBe(false);
+    expect(await roomObject.outsideCodexThinking(room.id, sender, question.id, true)).toBe(true);
+    expect(await socket.next("typing")).toMatchObject({ user: {id: member.user.id}, typing: true, codexMentionId: question.id });
+    expect(await roomObject.outsideCodexThinking(room.id, sender, question.id, false)).toBe(true);
+    expect(await socket.next("typing")).toMatchObject({ typing: false, codexMentionId: question.id });
     const reply = {room_id: room.id, mention_id: question.id, text: "本机 Codex 代答｜已有 3 项记录"};
     expect(await found(token, "send_message", reply)).toMatchObject({message: {text: reply.text, reply_to: question.id}});
+    expect(await roomObject.outsideCodexThinking(room.id, sender, question.id, true)).toBe(false);
     expect(await found(token, "send_message", reply)).toMatchObject({already_posted: true});
     const history = await found<{messages: Array<{text: string}>}>(token, "read_room", {room_id: room.id});
     expect(history.messages.filter(message => message.text === reply.text)).toHaveLength(1);

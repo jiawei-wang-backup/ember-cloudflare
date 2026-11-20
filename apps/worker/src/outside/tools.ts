@@ -3,6 +3,7 @@ import { hasWords, HISTORY_PAGE_SIZE, MAX_SEARCH_LENGTH, MESSAGE_TOO_LONG, sanit
 import type { OutsideScope } from "@ember/protocol/outside";
 import { markdownHtml, MAX_MARKDOWN_LENGTH } from "../bots/markdown";
 import type { Env } from "../env";
+import { pulseBinding } from "../pulse";
 import { searchIndex } from "../search-index";
 import { matchesOf } from "../searches";
 import { workspace, type OutsideAccess } from "../workspace";
@@ -182,6 +183,28 @@ interface Tool {
 
 const ROOM_ID = { type: "string", description: "The room's id, as list_rooms gives it." };
 
+const CODEX_THINKING: Tool = {
+  name: "set_codex_thinking",
+  title: "Set member Codex thinking status",
+  description: "Shows or clears a temporary status in a private project channel for a message that mentioned you.",
+  takes: {
+    room_id: ROOM_ID,
+    mention_id: {type: "string", description: "The message that mentioned you."},
+    thinking: {type: "boolean", description: "True while working, false when finished."},
+  },
+  required: ["room_id", "mention_id", "thinking"],
+  async run(env, access, {room_id: roomId, mention_id: mentionId, thinking}) {
+    if (typeof mentionId !== "string" || !/^[a-z0-9]{16}$/.test(mentionId) || typeof thinking !== "boolean")
+      throw new Refused("Give a valid mention_id and a thinking status.");
+    const room = await roomOf(env, access, roomId);
+    if (room.kind !== "closed" || (room.channelGroup !== "project" && !pulseBinding(env, room.id)))
+      throw new Refused(NO_ROOM);
+    const sender = await workspace(env).outsideSender(access, room.id, true);
+    if (!sender || sender === "limited") throw new Refused(NO_ROOM);
+    return {shown: await env.CHAT_ROOM.getByName(room.id).outsideCodexThinking(room.id, sender, mentionId, thinking)};
+  },
+};
+
 /** The tools a connection allowed to read has. */
 const READING: Tool[] = [
   {
@@ -288,7 +311,8 @@ async function answered(found: Promise<unknown>) {
 /** Gives `server` the tools `access` allows its app, each doing what it does as the connection's person. */
 export function registerTools(server: McpServer, env: Env, access: OutsideAccess): void {
   for (const { tools, annotations } of access.scopes.flatMap((scope) => TOOLS[scope] ?? [])) {
-    for (const { name, title, description, takes, required, run } of tools) {
+    const available = tools === SENDING && env.PULSE_TEAM_PROJECT_CHANNELS === "true" ? [...tools, CODEX_THINKING] : tools;
+    for (const { name, title, description, takes, required, run } of available) {
       const inputSchema = fromJsonSchema({ type: "object" as const, properties: takes, required, additionalProperties: false });
       server.registerTool(name, { title, description, inputSchema, annotations }, (given) => answered(run(env, access, given as Record<string, unknown>)));
     }

@@ -1035,6 +1035,7 @@ export class Workspace extends DurableObject<Env> {
   private readonly unfurls = new FixedWindowLimit(UNFURLS, UNFURL_WINDOW_MS);
   private readonly outsideRegistrations = new FixedWindowLimit(OUTSIDE_REGISTRATIONS_PER_ADDRESS, OUTSIDE_REGISTRATION_WINDOW_MS);
   private readonly outsideSends = new FixedWindowLimit(OUTSIDE_SENDS_PER_MINUTE, 60_000);
+  private readonly outsideThinkingUpdates = new FixedWindowLimit(60, 60_000);
   /** The probes custom domain checks send, each with its answer and when it's no longer waited for (see `expectProbe`). */
   private readonly probes = new Map<string, { answer: string; until: number }>();
   /** The access token of each app's sign-in that's being asked for now (`signInKey`). */
@@ -1680,12 +1681,13 @@ export class Workspace extends DurableObject<Env> {
    * they're in the room and it's one the app reaches (`reaches`), or "limited" once their apps have sent
    * as many in a minute as they may.
    */
-  async outsideSender({ userId, scopes }: OutsideReach, roomId: RoomId): Promise<OutsideSender | "limited" | null> {
+  async outsideSender({ userId, scopes }: OutsideReach, roomId: RoomId, thinking = false): Promise<OutsideSender | "limited" | null> {
     // Before anything is read, as `roomAccess` takes it.
     const authorizedAt = Date.now();
     const [[user], { member }, kind] = await Promise.all([this.store.peopleWithIds([userId]), this.store.roomAccess(roomId, userId, null), this.store.roomKind(roomId)]);
     if (!user || !member || !reaches(scopes, kind)) return null;
-    return this.outsideSends.attempt(userId) ? { user, tags: outsideTagsOf(userId, scopes), authorizedAt } : "limited";
+    const limit = thinking ? this.outsideThinkingUpdates : this.outsideSends;
+    return limit.attempt(userId) ? { user, tags: outsideTagsOf(userId, scopes), authorizedAt } : "limited";
   }
 
   /**

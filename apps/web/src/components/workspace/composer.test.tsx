@@ -1071,6 +1071,12 @@ describe("Typing indicator", () => {
     expect(indicator.closest("[aria-live]")).toBeNull();
   });
 
+  it("shows the member's Codex status above the composer", async () => {
+    const thinking = { ...typist("顾远", 2), codexThinking: true as const };
+    await showComposer({ typing: [thinking] });
+    expect(screen.getByText("顾远 · Codex 正在思考…")).toBeVisible();
+  });
+
   it("names them as the people directory lists them now, which follows a rename since the room heard them", async () => {
     const grace = { id: "u2", name: "Grace Hopper", bio: null, role: "member", status: "active", avatarUrl: "/users/u2/avatar" } as const;
     const { container } = render(

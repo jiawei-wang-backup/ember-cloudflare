@@ -396,6 +396,16 @@ describe("Presence", () => {
 });
 
 describe("Typing indicator", () => {
+  it("clears Codex thinking separately from the member's typing", () => {
+    const typing = { type: "typing", user: ada, typing: true } as const;
+    const thinking = { ...typing, codexMentionId: "m1" };
+    let state = frame(initialRoomState, { type: "frame", frame: typing, now: 1_000 });
+    state = frame(state, { type: "frame", frame: thinking, now: 1_100 });
+    expect(state.typing["codex:u1:m1"]?.user).toMatchObject({ id: ada.id, codexThinking: true });
+    state = frame(state, { type: "frame", frame: { ...thinking, typing: false }, now: 1_200 });
+    expect(Object.values(state.typing)).toEqual([{ user: ada, at: 1_000 }]);
+  });
+
   it("expires stale typing indicators", () => {
     let state = frame(initialRoomState, { type: "frame", frame: { type: "typing", user: ada, typing: true }, now: 1_000 });
     expect(Object.keys(state.typing)).toEqual(["u1"]);

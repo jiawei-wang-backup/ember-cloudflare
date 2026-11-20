@@ -21,9 +21,11 @@ import { SnippetDialog } from "./snippet-dialog";
  * region: announced on every change, a bare list of names would mean nothing out of context. Names that
  * don't fit end in an ellipsis, rather than wrapping down over the message box.
  */
-function TypingIndicator({ typists }: { typists: User[] }) {
+type ComposerTypist = User & { codexThinking?: true };
+
+function TypingIndicator({ typists }: { typists: ComposerTypist[] }) {
   const nameOf = useNameOf();
-  const names = typists.map(nameOf).sort().join(", ");
+  const names = typists.map((user) => user.codexThinking ? `${nameOf(user)} · Codex 正在思考…` : nameOf(user)).sort().join(", ");
   return (
     <div
       className={cn(
@@ -282,7 +284,7 @@ interface Props {
   direct?: boolean;
   /** Who's writing, whose drafts are their own. */
   userId: string;
-  typing: User[];
+  typing: ComposerTypist[];
   disabled: boolean;
   /**
    * Holds back the editor's code while the room's first messages are on their way, and until they're
