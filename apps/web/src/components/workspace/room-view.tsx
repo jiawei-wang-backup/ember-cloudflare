@@ -182,7 +182,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
           {currentProject?.business && <nav aria-label="项目工作区" className="flex min-w-0 flex-wrap items-center gap-1">{([["discussion", "项目讨论"], ["overview", "项目总览"], ["assistant", "项目助手"], ["feedback", "反馈与落实"]] as const).map(([value, label]) => <button key={value} aria-current={view === value ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => {if (view !== value) setView(value);}}>{label}</button>)}</nav>}
           {projectWorkspace && <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>}
           </div>
-          {currentProject?.business && view === "overview" && <ProjectBusiness roomId={room.id} key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
+          {currentProject?.business && view === "overview" && <ProjectBusiness key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
           {currentProject?.business && view === "assistant" && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
             reference={assistantMessage?.roomId === room.id ? {
               text: assistantMessage.plainText || "附件",
