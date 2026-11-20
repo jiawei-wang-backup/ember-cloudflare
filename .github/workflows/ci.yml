@@ -5,6 +5,7 @@ on:
     branches: [integration/beta7-cn]
   pull_request:
     branches: [integration/beta7-cn]
+  workflow_dispatch:
 
 # The checks only read the repository, so their token can only read it.
 permissions:
