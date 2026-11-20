@@ -46,6 +46,7 @@ def github_get(route):
     return json.loads(subprocess.check_output(
         [gh, "api", "--hostname", "github.com", "--method", "GET", route],
         encoding="utf-8", timeout=6, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         env={**os.environ, "GH_PROMPT_DISABLED": "1"}))
 
 
@@ -231,7 +232,8 @@ def answer(message, context):
                         "-c", 'web_search="disabled"',
                         *[option for feature in ("shell_tool", "unified_exec", "apps", "plugins", "multi_agent") for option in ("--disable", feature)],
                         "-o", str(output), "-"], input=prompt, encoding="utf-8", cwd=work, timeout=120,
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         result = output.read_text(encoding="utf-8").strip()
     body = re.sub(r"<[^>]*>", "", result)[:1000] or "现有资料里暂时没有这个问题的答案。"
     cited = {int(value) for value in re.findall(r"\[代码(\d+)\]", body)}
