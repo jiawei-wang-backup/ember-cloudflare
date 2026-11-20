@@ -155,13 +155,16 @@ async function searchMessages(env: Env, access: OutsideAccess, { words, room_id:
  * anyone, and the room posts it as a reply, which goes to no bot, so a message sent this way calls
  * nobody, @ember and the agents included, even in a direct message with one.
  */
-async function sendMessage(env: Env, access: OutsideAccess, { room_id: roomId, text, thread_id: threadId, mention_id: mentionId }: Record<string, unknown>): Promise<unknown> {
+async function sendMessage(env: Env, access: OutsideAccess, { room_id: roomId, text, thread_id: threadId, mention_id: mentionId, lease_id: leaseId }: Record<string, unknown>): Promise<unknown> {
   if (typeof text !== "string" || text.trim() === "") throw new Refused("Give the message to send, as `text`.");
   if (text.length > MAX_MARKDOWN_LENGTH) throw new Refused(MESSAGE_TOO_LONG);
   if (threadId !== undefined && typeof threadId !== "string") throw new Refused("Give `thread_id` as the id of the message the thread is under.");
   if (mentionId !== undefined && (typeof mentionId !== "string" || !/^[a-z0-9]{16}$/.test(mentionId) || threadId !== undefined))
     throw new Refused("Give a valid mention_id without thread_id.");
   const room = await roomOf(env, access, roomId);
+  if (leaseId !== undefined && (typeof mentionId !== "string" || typeof leaseId !== "string" ||
+      !(await workspace(env).changeCodexMentionLease(access, room.id, mentionId, leaseId, "renew"))))
+    throw new Refused("This Codex job is no longer claimed by the connection.");
   const sender = await workspace(env).outsideSender(access, room.id);
   if (sender === "limited") throw new Refused(SENDING_TOO_FAST);
   const sent = sender && (await env.CHAT_ROOM.getByName(room.id).createOutsideMessage(room.id, sender, markdownHtml(text), threadId, mentionId));
@@ -191,17 +194,20 @@ const CODEX_THINKING: Tool = {
     room_id: ROOM_ID,
     mention_id: {type: "string", description: "The message that mentioned you."},
     thinking: {type: "boolean", description: "True while working, false when finished."},
+    queued: {type: "boolean", description: "True while waiting to be processed by the client."},
   },
   required: ["room_id", "mention_id", "thinking"],
-  async run(env, access, {room_id: roomId, mention_id: mentionId, thinking}) {
-    if (typeof mentionId !== "string" || !/^[a-z0-9]{16}$/.test(mentionId) || typeof thinking !== "boolean")
+  async run(env, access, {room_id: roomId, mention_id: mentionId, thinking, queued}) {
+    if (typeof mentionId !== "string" || !/^[a-z0-9]{16}$/.test(mentionId) || typeof thinking !== "boolean" || (queued !== undefined && typeof queued !== "boolean"))
       throw new Refused("Give a valid mention_id and a thinking status.");
     const room = await roomOf(env, access, roomId);
     if (room.kind !== "closed" || (room.channelGroup !== "project" && !pulseBinding(env, room.id)))
       throw new Refused(NO_ROOM);
-    const sender = await workspace(env).outsideSender(access, room.id, true);
+    const work = workspace(env);
+    if (queued && !(await work.codexMentionStillQueued(access.userId, room.id, mentionId))) return {shown: false};
+    const sender = await work.outsideSender(access, room.id, true);
     if (!sender || sender === "limited") throw new Refused(NO_ROOM);
-    return {shown: await env.CHAT_ROOM.getByName(room.id).outsideCodexThinking(room.id, sender, mentionId, thinking)};
+    return {shown: await env.CHAT_ROOM.getByName(room.id).outsideCodexThinking(room.id, sender, mentionId, thinking, queued === true)};
   },
 };
 
@@ -284,6 +290,7 @@ const SENDING: Tool[] = [
       text: { type: "string", description: "The message, in Markdown." },
       thread_id: { type: "string", description: "The id of the message to reply under, in its thread: one with `replies`, or a reply's `reply_to`." },
       mention_id: {type: "string", description: "Reply once to this message that mentioned you and show the reply in the room."},
+      lease_id: { type: "string", description: "Lease returned when claiming a member Codex job." },
     },
     required: ["room_id", "text"],
     run: sendMessage,

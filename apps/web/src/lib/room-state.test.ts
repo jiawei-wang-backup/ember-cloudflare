@@ -400,7 +400,10 @@ describe("Typing indicator", () => {
     const typing = { type: "typing", user: ada, typing: true } as const;
     const thinking = { ...typing, codexMentionId: "m1" };
     let state = frame(initialRoomState, { type: "frame", frame: typing, now: 1_000 });
+    state = frame(state, { type: "frame", frame: { ...thinking, codexQueued: true }, now: 1_050 });
+    expect(state.typing["codex:u1:m1"]?.user.codexQueued).toBe(true);
     state = frame(state, { type: "frame", frame: thinking, now: 1_100 });
+    expect(state.typing["codex:u1:m1"]?.user.codexQueued).toBeUndefined();
     expect(state.typing["codex:u1:m1"]?.user).toMatchObject({ id: ada.id, codexThinking: true });
     state = frame(state, { type: "frame", frame: { ...thinking, typing: false }, now: 1_200 });
     expect(Object.values(state.typing)).toEqual([{ user: ada, at: 1_000 }]);

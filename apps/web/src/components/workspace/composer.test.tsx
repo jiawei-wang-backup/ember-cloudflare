@@ -1073,8 +1073,9 @@ describe("Typing indicator", () => {
 
   it("shows the member's Codex status above the composer", async () => {
     const thinking = { ...typist("顾远", 2), codexThinking: true as const };
-    await showComposer({ typing: [thinking] });
-    expect(screen.getByText("顾远 · Codex 正在思考…")).toBeVisible();
+    const queued = { ...typist("Grace", 3), codexThinking: true as const, codexQueued: true as const };
+    const {view} = await showComposer({ typing: [thinking, queued, queued] });
+    expect(view.container.querySelector(".spinner")).toHaveTextContent("Grace · 已收到，排队中, 顾远 · Codex 正在思考…");
   });
 
   it("names them as the people directory lists them now, which follows a rename since the room heard them", async () => {

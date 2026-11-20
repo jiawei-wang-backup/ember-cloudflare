@@ -1,3 +1,4 @@
+import { isRoomId } from "@ember/protocol";
 import {
   MCP_PATH,
   OUTSIDE_ASK_REFUSED,
@@ -96,6 +97,8 @@ export function outsideAction(request: Request, env: Env, pathname: string): (()
 
 function appAction(request: Request, env: Env, pathname: string): (() => Promise<Response>) | null {
   if (pathname === MCP_PATH) return () => answerApp(request, env);
+  if (pathname === "/api/codex/mentions" && env.PULSE_TEAM_PROJECT_CHANNELS === "true")
+    return () => codexMentions(request, env);
   if (pathname === RESOURCE_METADATA_PATH || pathname === `${RESOURCE_METADATA_PATH}${MCP_PATH}`)
     return () => taking(request, "GET", () => described(request, env, resourceMetadata));
   if (pathname === SERVER_METADATA_PATH) return () => taking(request, "GET", () => described(request, env, serverMetadata));
@@ -198,6 +201,45 @@ function unauthorized(request: Request, presented: boolean): Response {
     ...(presented ? [`error="invalid_token"`, `error_description="The token is no good. Connect again."`] : []),
   ].join(", ");
   return Response.json({ error: "Connect to Ember to ask it." }, { status: 401, headers: { ...ANY_ORIGIN, ...PRIVATE, "WWW-Authenticate": challenge } });
+}
+
+async function codexMentions(request: Request, env: Env): Promise<Response> {
+  const token = bearerOf(request);
+  const work = workspace(env);
+  const access = token === null ? null : await work.outsideAccess(await tokenDigest(token, env.SESSION_SECRET));
+  if (!access || access === "off" || access.resource !== resourceAt(urlOf(request).origin)) return unauthorized(request, token !== null);
+  if (!access.scopes.includes("private") || !access.scopes.includes("write"))
+    return Response.json({error: "Project channel read and write access is required."}, {status: 403, headers: PRIVATE});
+  if (request.method === "GET") {
+    const rooms = [...new Set(urlOf(request).searchParams.getAll("room"))];
+    const last = request.headers.get("Last-Event-ID") || "0";
+    const after = Number(last);
+    if (!rooms.length || rooms.length > 100 || rooms.some(room => !isRoomId(room)) || !/^\d+$/.test(last) || !Number.isSafeInteger(after))
+      return Response.json({error: "Invalid rooms or cursor."}, {status: 400, headers: PRIVATE});
+    return work.codexMentionStream(access, rooms, after);
+  }
+  if (request.method !== "POST") return new Response(null, {status: 405, headers: PRIVATE});
+  const input = await jsonBodyOf(request);
+  if (!isObject(input) || typeof input.roomId !== "string" || !isRoomId(input.roomId) ||
+      typeof input.messageId !== "string" || !/^[a-z0-9]{16}$/.test(input.messageId))
+    return Response.json({error: "Invalid Codex event."}, {status: 400, headers: PRIVATE});
+  const {roomId, messageId, action, leaseId} = input;
+  if (action === "claim") {
+    const sender = await work.outsideSender(access, roomId, true);
+    if (!sender) return Response.json({status: "gone"}, {headers: PRIVATE});
+    if (sender === "limited") return Response.json({status: "busy", retryAfter: 5}, {headers: PRIVATE});
+    const claimed = await work.claimCodexMention(access, roomId, messageId);
+    if (claimed.status !== "claimed") return Response.json(claimed, {headers: PRIVATE});
+    const question = await env.CHAT_ROOM.getByName(roomId).outsideCodexQuestion(roomId, sender, messageId);
+    if (question) return Response.json({...claimed, question}, {headers: PRIVATE});
+    await work.changeCodexMentionLease(access, roomId, messageId, claimed.leaseId, "complete");
+    return Response.json({status: "gone"}, {headers: PRIVATE});
+  }
+  if (typeof leaseId !== "string" || !/^[a-f0-9-]{36}$/.test(leaseId) ||
+      (action !== "renew" && action !== "complete" && action !== "release"))
+    return Response.json({error: "Invalid Codex lease."}, {status: 400, headers: PRIVATE});
+  const accepted = await work.changeCodexMentionLease(access, roomId, messageId, leaseId, action);
+  return Response.json({accepted}, {headers: PRIVATE});
 }
 
 /** `/mcp`: what a connected AI app asks Ember, over the Model Context Protocol, with its access token. */

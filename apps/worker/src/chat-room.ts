@@ -741,7 +741,18 @@ export class ChatRoom extends DurableObject<Env> {
     });
   }
 
-  async outsideCodexThinking(roomId: RoomId, { user, tags, authorizedAt }: OutsideSender, mentionId: string, thinking: boolean): Promise<boolean> {
+  async outsideCodexQuestion(roomId: RoomId, {user, tags, authorizedAt}: OutsideSender, messageId: string) {
+    return this.serially(async () => {
+      if (await this.revocationsFor(roomId).refuse(tags, authorizedAt)) return null;
+      const store = this.storeFor(roomId);
+      const message = await this.findUndeleted(store, messageId);
+      if (!message || message.creator.id === user.id || !message.mentions.some(person => person.id === user.id) ||
+          (await store.storedClientMessageIds(user, ["member-codex-" + messageId])).length) return null;
+      return {id: message.id, text: message.plainText, mention_from_id: message.creator.id, mention_recipient_id: user.id};
+    });
+  }
+
+  async outsideCodexThinking(roomId: RoomId, { user, tags, authorizedAt }: OutsideSender, mentionId: string, thinking: boolean, queued = false): Promise<boolean> {
     return this.serially(async () => {
       if (await this.revocationsFor(roomId).refuse(tags, authorizedAt)) return false;
       const store = this.storeFor(roomId);
@@ -749,7 +760,7 @@ export class ChatRoom extends DurableObject<Env> {
       if (!mentioned || mentioned.deleted || mentioned.creator.id === user.id ||
           !mentioned.mentions.some(person => person.id === user.id)) return false;
       if (thinking && (await store.storedClientMessageIds(user, ["member-codex-" + mentionId])).length) return false;
-      this.broadcast({ type: "typing", user, typing: thinking, codexMentionId: mentionId });
+      this.broadcast({ type: "typing", user, typing: thinking, codexMentionId: mentionId, ...(queued && {codexQueued: true}) });
       return true;
     });
   }

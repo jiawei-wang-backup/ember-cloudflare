@@ -127,6 +127,8 @@ import { guestSignIn, type Env } from "./env";
 import { pictureObjects, type StoredPicture } from "./files/pictures";
 import type { RelayKey } from "./huddles/relay";
 import type { HuddleApp, SfuApp } from "./huddles/sfu";
+import { CodexMentions } from "./outside/codex-mentions";
+import { pulseBinding } from "./pulse";
 import { alphanumeric, sortableId } from "./ids";
 import { sendEmail, sendEmails, senderOf, type Sender } from "./mail";
 import {
@@ -1009,6 +1011,7 @@ const shownApp = (app: StoredApp, everyPicks: readonly AgentToolPicks[]): App =>
  * besides its room's, for what changes outside the room; like rooms, it hibernates them.
  */
 export class Workspace extends DurableObject<Env> {
+  private readonly codexMentions: CodexMentions;
   private readonly db: Db;
   private readonly store: WorkspaceStore;
   private readonly outside: OutsideStore;
@@ -1065,6 +1068,7 @@ export class Workspace extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.codexMentions = new CodexMentions(ctx.storage);
     // As in rooms, the runtime answers the app's heartbeats without waking the Workspace.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'));
     this.db = openDb(env, ctx.storage, "workspace");
@@ -1660,6 +1664,31 @@ export class Workspace extends DurableObject<Env> {
     if (!person || typeof person === "string") return person;
     if (!(await this.outside.disconnect(person.user.id, id))) return "not found";
     return (await this.outside.connectionsOf(person.user.id, new Date().toISOString())).map(shownConnection);
+  }
+
+  private async codexProjectRoom(userId: UserId, roomId: RoomId): Promise<boolean> {
+    const found = await this.store.roomToChange(roomId, userId);
+    return found?.room.kind === "closed" && (found.room.channelGroup === "project" || Boolean(pulseBinding(this.env, roomId)));
+  }
+
+  async codexMentionStream(access: OutsideAccess, rooms: RoomId[], after: number): Promise<Response> {
+    const found = await Promise.all(rooms.map(async id => [id, await this.codexProjectRoom(access.userId, id)] as const));
+    return this.codexMentions.stream(access.userId, new Set(found.flatMap(([id, allowed]) => allowed ? [id] : [])), after);
+  }
+
+  async claimCodexMention(access: OutsideAccess, roomId: RoomId, messageId: string) {
+    if (!(await this.codexProjectRoom(access.userId, roomId))) return {status: "gone" as const};
+    return this.codexMentions.claim(access.userId, access.connectionId, roomId, messageId);
+  }
+
+  async codexMentionStillQueued(userId: UserId, roomId: RoomId, messageId: string): Promise<boolean> {
+    return this.codexMentions.stillQueued(userId, roomId, messageId);
+  }
+
+  async changeCodexMentionLease(access: OutsideAccess, roomId: RoomId, messageId: string, leaseId: string,
+    action: "renew" | "complete" | "release"): Promise<boolean> {
+    if (action === "renew" && !(await this.codexProjectRoom(access.userId, roomId))) return false;
+    return this.codexMentions.changeLease(access.userId, access.connectionId, roomId, messageId, leaseId, action);
   }
 
   async pulseReporter(userId: UserId): Promise<User | null> {
@@ -4897,6 +4926,18 @@ export class Workspace extends DurableObject<Env> {
    */
   async applyRoomEvents(roomId: RoomId, events: RoomEvent[], viewerIds: UserId[]): Promise<RoomEventDeliveries> {
     if (events.length === 0) return { pushes: [], webhooks: [], asks: [] };
+    if (this.env.PULSE_TEAM_PROJECT_CHANNELS === "true") {
+      const eligible = new Map<UserId, boolean>();
+      for (const {userId, message} of events) {
+        if (!message) continue;
+        for (const recipient of message.mentionIds) {
+          if (recipient === userId || recipient === ASSISTANT_ID) continue;
+          const allowed = eligible.get(recipient) ?? await this.codexProjectRoom(recipient, roomId);
+          eligible.set(recipient, allowed);
+          if (allowed) await this.codexMentions.add(recipient, roomId, message.id);
+        }
+      }
+    }
     const { on: pushing } = await webPush(this.env);
     const { marks, active, pushes, webhooks, asks } = await this.store.applyRoomEvents(roomId, events, viewerIds, pushing, guestSignIn(this.env));
     for (const [userId, at] of marks) this.tell([userId], at === null ? { type: "room.read", roomId } : { type: "room.unread", roomId, at });

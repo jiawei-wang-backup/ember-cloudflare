@@ -129,6 +129,7 @@ const handleRequest: http.RequestListener = (req, res) => {
     res.writeHead(answer.statusCode!, answer.headers);
     answer.pipe(res);
   });
+  res.on("close", () => { if (!res.writableFinished) upstream.destroy(); });
   upstream.on("error", () => { if (!res.headersSent) res.writeHead(503); res.end("中文演示 Worker 正在启动，请稍后刷新。"); });
   req.pipe(upstream);
 };

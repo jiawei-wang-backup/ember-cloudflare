@@ -20,7 +20,7 @@ import type { Env } from "../src/env";
 import { MAX_SHOWN_LENGTH, MESSAGES_FOUND, SENDING_TOO_FAST } from "../src/outside/tools";
 import { SearchIndex } from "../src/search-index";
 import { MAX_OUTSIDE_CLIENTS, OUTSIDE_SENDS_PER_MINUTE } from "../src/workspace";
-import { api, connect, cookieOf, createRoom, direct, freshDeploy, origin, post, roomSql, roomStub, settle, shown, signIn, upload, workspaceSql, workspaceStub, type Session, type Socket } from "./support";
+import { api, apiWith, connect, cookieOf, createRoom, direct, freshDeploy, origin, post, roomSql, roomStub, settle, shown, signIn, upload, workspaceSql, workspaceStub, type Session, type Socket } from "./support";
 
 // Outside AI: an AI app connects to Ember over the Model Context Protocol, at `/mcp`, and signs in
 // with OAuth, where Ember is the authorization server. The tests are the app: they find out how to sign
@@ -1180,3 +1180,68 @@ it("shows a structured mention to its recipient and posts only one visible Codex
     expect(history.messages.filter(message => message.text === reply.text)).toHaveLength(1);
   } finally {socket.close();}
 });
+
+it("pushes project mentions and replays unfinished jobs while only one OAuth client can claim them", async () => {
+  const { member, administrator } = await setUpOn();
+  const scope = "read write private create_project_channels";
+  const token = (await connected(member, {scope}, [], ["private", "create_project_channels"])).tokens.access_token;
+  const other = (await connected(member, {scope}, [], ["private", "create_project_channels"])).tokens.access_token;
+  const bindings = {PULSE_TEAM_PROJECT_CHANNELS: "true"};
+  const original = await runInDurableObject(workspaceStub(), (instance) => {
+    const object = instance as unknown as {env: Env};
+    const original = object.env;
+    object.env = {...original, ...bindings};
+    return original;
+  });
+  const headers = (bearer: string) => ({Authorization: `Bearer ${bearer}`});
+  const eventPath = "/api/codex/mentions";
+  try {
+    const {room} = await found<{room: {id: string}}>(token, "create_project_channel",
+      {repository: "example/realtime", project_name: "实时验证"});
+    const socket = await connect(room.id, administrator);
+    const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    async function stream(after = "0") {
+      const response = await apiWith(bindings, `${eventPath}?room=${room.id}`, {headers: {...headers(token), "Last-Event-ID": after}});
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+      const reader = response.body!.getReader();
+      readers.push(reader);
+      return reader;
+    }
+    async function event(reader: ReadableStreamDefaultReader<Uint8Array>) {
+      const decoder = new TextDecoder();
+      let body = "";
+      while (!body.includes("event: mention")) {
+        const next = await reader.read();
+        if (next.done) throw new Error("Event stream closed before delivery");
+        body += decoder.decode(next.value, {stream: true});
+      }
+      return body;
+    }
+    const job = async (bearer: string, messageId: string, action: string, leaseId?: string) =>
+      (await apiWith(bindings, eventPath, {method:"POST", headers:{...headers(bearer),"Content-Type":"application/json"},
+        body:JSON.stringify({roomId: room.id, messageId, action, leaseId})})).json() as Promise<{status?:string; leaseId?:string; accepted?:boolean}>;
+    try {
+      const reader = await stream();
+      const question = await post(socket, `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment>解释项目</p>`);
+      const live = await event(reader);
+      expect(live).toContain(question.id);
+      expect(live).not.toContain("解释项目");
+      const cursor = /id: (\d+)/.exec(live)![1];
+      const claims = await Promise.all([job(token, question.id, "claim"), job(other, question.id, "claim")]);
+      expect(claims.map(claim => claim.status).sort()).toEqual(["busy", "claimed"]);
+      const winner = claims[0].status === "claimed" ? token : other;
+      const loser = winner === token ? other : token;
+      const lease = claims.find(claim => claim.leaseId)!.leaseId!;
+      expect(await job(loser, question.id, "complete", lease)).toEqual({accepted:false});
+      expect(await event(await stream(cursor))).toContain(question.id);
+      expect(await job(winner, question.id, "complete", lease)).toEqual({accepted:true});
+      expect(await job(loser, question.id, "claim")).toEqual({status:"gone"});
+    } finally {
+      await Promise.allSettled(readers.map(reader => reader.cancel()));
+      socket.close();
+    }
+  } finally {
+    await runInDurableObject(workspaceStub(), (instance) => void ((instance as unknown as {env: Env}).env = original));
+  }
+}, 20_000);

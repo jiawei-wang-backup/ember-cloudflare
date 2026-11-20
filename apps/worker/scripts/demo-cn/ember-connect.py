@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import sys
 import time
+from threading import Lock
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError
@@ -21,11 +22,18 @@ RESOURCE = ORIGIN + "/mcp"
 PACKAGE = Path(__file__).resolve().parent
 STATE = Path.home() / ".ember-cn"
 CREDENTIALS = STATE / "oauth.json"
+_REFRESH = Lock()
 
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
+
+
+def connection():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(PACKAGE / "Ember-LAN-CA.pem")
+    return build_opener(ProxyHandler({}), NoRedirect(), HTTPSHandler(context=context))
 
 
 def request(path, payload, *, form=False, token=None, protocol=None):
@@ -36,10 +44,7 @@ def request(path, payload, *, form=False, token=None, protocol=None):
     if protocol:
         headers["MCP-Protocol-Version"] = protocol
     data = (urlencode(payload) if form else json.dumps(payload)).encode()
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.load_verify_locations(PACKAGE / "Ember-LAN-CA.pem")
-    opener = build_opener(ProxyHandler({}), NoRedirect(), HTTPSHandler(context=context))
-    with opener.open(Request(ORIGIN + path, data, headers), timeout=25) as response:
+    with connection().open(Request(ORIGIN + path, data, headers), timeout=25) as response:
         if response.status == 202 or response.status == 204:
             return None
         if response.headers.get_content_type() == "text/event-stream":
@@ -110,18 +115,55 @@ def connect(include_private=False, include_write=False, create_projects=False, o
     save(client, tokens)
 
 
-def mcp(message, protocol=None, *, refresh=True):
+def authorized(call, *, refresh=True):
     current = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
     try:
-        return request("/mcp", message, token=current["access_token"], protocol=protocol)
+        return call(current["access_token"])
     except HTTPError as error:
         if error.code != 401 or not refresh:
             raise
-    client = current["client_id"]
-    tokens = request("/oauth/token", {"grant_type": "refresh_token", "client_id": client,
-                     "refresh_token": current["refresh_token"], "resource": RESOURCE}, form=True)
-    save(client, tokens)
-    return request("/mcp", message, token=tokens["access_token"], protocol=protocol)
+    with _REFRESH:
+        latest = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
+        if latest["access_token"] == current["access_token"]:
+            client = latest["client_id"]
+            tokens = request("/oauth/token", {"grant_type": "refresh_token", "client_id": client,
+                             "refresh_token": latest["refresh_token"], "resource": RESOURCE}, form=True)
+            save(client, tokens)
+            latest = tokens
+    return call(latest["access_token"])
+
+
+def mcp(message, protocol=None, *, refresh=True):
+    return authorized(lambda token: request("/mcp", message, token=token, protocol=protocol), refresh=refresh)
+
+
+def mention_events(rooms, after):
+    path = "/api/codex/mentions?" + urlencode([("room", room) for room in rooms])
+
+    def open_stream(token):
+        headers = {"Authorization": "Bearer " + token, "Accept": "text/event-stream", "Last-Event-ID": str(after)}
+        return connection().open(Request(ORIGIN + path, headers=headers), timeout=25)
+
+    with authorized(open_stream) as stream:
+        if stream.headers.get_content_type() != "text/event-stream":
+            raise ValueError("Ember 代答推送格式错误")
+        fields = {}
+        for raw in stream:
+            line = raw.decode("utf-8").rstrip("\r\n")
+            if not line:
+                if fields.get("event") == "mention":
+                    yield int(fields["id"]), json.loads(fields["data"])
+                fields.clear()
+            elif ":" in line and not line.startswith(":"):
+                name, value = line.split(":", 1)
+                fields[name] = value.lstrip(" ")
+
+
+def mention_job(action, room_id, message_id, lease_id=None):
+    payload = {"action": action, "roomId": room_id, "messageId": message_id}
+    if lease_id:
+        payload["leaseId"] = lease_id
+    return authorized(lambda token: request("/api/codex/mentions", payload, token=token))
 
 
 def call_tool(name, arguments, *, refresh=True):

@@ -13,9 +13,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from threading import Event, Thread
+from threading import Condition, Event, Thread
 from datetime import datetime, timezone
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from uuid import UUID
 
@@ -244,7 +244,7 @@ def answer(message, context):
 
 
 @contextmanager
-def thinking_status(room, mention_id):
+def thinking_status(room, mention_id, lease_id=None):
     stopped = Event()
 
     def update(thinking):
@@ -255,8 +255,13 @@ def thinking_status(room, mention_id):
     def heartbeat():
         errors = (OSError, ValueError, KeyError, StopIteration)
         shown = False
+        renew_at = time.monotonic() + 45
         try:
             while not stopped.is_set():
+                if lease_id and time.monotonic() >= renew_at:
+                    if not CONNECTOR.mention_job("renew", room, mention_id, lease_id)["accepted"]:
+                        break
+                    renew_at = time.monotonic() + 45
                 if not update(True):
                     break
                 shown = True
@@ -278,47 +283,190 @@ def thinking_status(room, mention_id):
         stopped.set()
 
 
-def run():
+def bound_projects():
+    selection = json.loads(SCOPE.read_text(encoding="utf-8-sig"))
+    if selection.get("schema_version") != 1 or not selection.get("confirmed_at"):
+        raise ValueError("需要先确认项目范围")
+    if selection.get("ember_paired") != ONBOARD.PAIRED_SCOPE:
+        return {}
+    rooms = [project.get("ember_room_id") for project in selection["projects"]]
+    return {room: project for room, project in zip(rooms, selection["projects"])
+            if room and rooms.count(room) == 1}
+
+
+class MentionQueue:
+    def __init__(self):
+        self.changed = Condition()
+        self.notify_status = Event()
+        self.pending = {}
+        self.active = None
+        self.completed = deque(maxlen=512)
+
+    def put(self, room, message_id, legacy=None):
+        key = (room, message_id)
+        with self.changed:
+            if key not in self.pending and key != self.active and key not in self.completed:
+                self.pending[key] = (legacy, time.monotonic())
+                self.changed.notify()
+                self.notify_status.set()
+
+    def take(self):
+        with self.changed:
+            while True:
+                now = time.monotonic()
+                for key, (legacy, ready) in self.pending.items():
+                    if ready <= now:
+                        del self.pending[key]
+                        self.active = key
+                        return key, legacy
+                deadline = min((ready for _, ready in self.pending.values()), default=now + 30)
+                self.changed.wait(max(0, deadline - now))
+
+    def finish(self, key, legacy, delay=None):
+        with self.changed:
+            self.active = None
+            if delay is None:
+                self.completed.append(key)
+            else:
+                self.pending[key] = (legacy, time.monotonic() + delay)
+            self.changed.notify()
+
+    def notify_queued(self):
+        while True:
+            self.notify_status.wait(4)
+            self.notify_status.clear()
+            with self.changed:
+                queued = list(dict.fromkeys(room for room, _ in self.pending))[:4]
+                jobs = [next(key for key in self.pending if key[0] == room) for room in queued]
+            for room, message_id in jobs:
+                try:
+                    CONNECTOR.call_tool("set_codex_thinking", {"room_id": room, "mention_id": message_id,
+                                        "thinking": True, "queued": True}, refresh=False)
+                except (OSError, ValueError, KeyError, StopIteration):
+                    pass
+
+
+def legacy_mentions(queue, rooms, since):
+    for room in rooms:
+        before = None
+        recent = []
+        # The older server has no job queue. Stop paging at the start time.
+        for _ in range(5):
+            arguments = {"room_id": room}
+            if before:
+                arguments["before"] = before
+            page = CONNECTOR.call_tool("read_room", arguments)
+            reached_start = False
+            for msg in reversed(page["messages"]):
+                if datetime.fromisoformat(msg["at"].replace("Z", "+00:00")) < since:
+                    reached_start = True
+                    break
+                if msg.get("mentions_you") and not msg.get("deleted"):
+                    recent.append(msg)
+            before = page.get("older")
+            if reached_start or not before:
+                break
+        for msg in reversed(recent):
+            queue.put(room, msg["id"], msg)
+
+
+def receive_mentions(queue):
     since = datetime.now(timezone.utc)
-    handled = set()
+    cursor = 0
+    retry = 1
     while True:
         try:
-            selection = json.loads(SCOPE.read_text(encoding="utf-8-sig"))
-            if selection.get("schema_version") != 1 or not selection.get("confirmed_at"):
-                raise ValueError("需要先确认项目范围")
-            if selection.get("ember_paired") != ONBOARD.PAIRED_SCOPE:
-                time.sleep(12)
+            rooms = tuple(bound_projects())
+            if not rooms:
+                time.sleep(3)
                 continue
-            rooms = [project.get("ember_room_id") for project in selection["projects"]]
-            for project in selection["projects"]:
-                room = project.get("ember_room_id")
-                if not room or rooms.count(room) != 1:
+            try:
+                for event_id, event in CONNECTOR.mention_events(rooms, cursor):
+                    if event["roomId"] in rooms:
+                        queue.put(event["roomId"], event["messageId"])
+                    cursor = max(cursor, event_id)
+                retry = 1
+                continue
+            except HTTPError as exc:
+                if exc.code != 404:
+                    raise
+            # A previous Ember version can be used while the server update is rolling out.
+            for _ in range(20):
+                legacy_mentions(queue, rooms, since)
+                time.sleep(3)
+                rooms = tuple(bound_projects())
+        except (OSError, ValueError, KeyError, StopIteration, URLError) as exc:
+            print(f"频道监听暂不可用：{type(exc).__name__}", flush=True)
+            time.sleep(retry)
+            retry = min(retry * 2, 15)
+
+
+def cached_context(project, cache):
+    marker = PENDING / "ember-context-revision"
+    try:
+        generation = marker.stat().st_mtime_ns
+    except FileNotFoundError:
+        generation = None
+    key = (project["repository"], tuple(sorted(project["source_ids"])))
+    cached = cache.get(key)
+    now = time.monotonic()
+    if cached and cached[0] == generation and now < cached[1]:
+        return cached[2]
+    data = uploaded_context(project)
+    cache[key] = (generation, now + 30, data)
+    return data
+
+
+def run():
+    queue = MentionQueue()
+    Thread(target=receive_mentions, args=(queue,), daemon=True).start()
+    Thread(target=queue.notify_queued, daemon=True).start()
+    cache = {}
+    while True:
+        (room, message_id), legacy = queue.take()
+        lease = None
+        delay = None
+        try:
+            project = bound_projects().get(room)
+            if not project:
+                continue
+            if legacy is None:
+                claimed = CONNECTOR.mention_job("claim", room, message_id)
+                if claimed["status"] == "busy":
+                    delay = min(30, max(2, claimed["retryAfter"]))
                     continue
+                if claimed["status"] != "claimed":
+                    continue
+                lease = claimed["leaseId"]
+                message = claimed["question"]
+            else:
+                message = legacy
+            with thinking_status(room, message_id, lease):
                 try:
-                    for msg in CONNECTOR.call_tool("read_room", {"room_id": room})["messages"]:
-                        if not msg.get("mentions_you") or msg["id"] in handled or msg.get("deleted"):
-                            continue
-                        if datetime.fromisoformat(msg["at"].replace("Z", "+00:00")) < since:
-                            continue
-                        with thinking_status(room, msg["id"]):
-                            try:
-                                context, allowed = uploaded_context(project)
-                                reply, state = continuing_reply(project, msg, context, allowed, room, time.time())
-                            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-                                state = None
-                                reply = "暂时无法核验该项目已上传的会话资料，请稍后再问。"
-                            # Ember uses the mention ID to suppress retries from the same member.
-                            CONNECTOR.call_tool("send_message", {"room_id": room, "mention_id": msg["id"],
-                                                               "text": "本机 Codex 代答｜" + reply})
-                        handled.add(msg["id"])
-                        if state:
-                            state[1]["last_answer"] = time.time()
-                            ONBOARD.write_state(*state)
-                except (OSError, ValueError, KeyError, StopIteration, URLError) as exc:
-                    print(f"频道监听暂不可用：{type(exc).__name__}", flush=True)
-        except (OSError, ValueError, KeyError) as exc:
-            print(f"项目选择读取失败：{type(exc).__name__}", flush=True)
-        time.sleep(12)
+                    context, allowed = cached_context(project, cache)
+                    reply, state = continuing_reply(project, message, context, allowed, room, time.time())
+                except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                    state = None
+                    reply = "暂时无法核验该项目已上传的会话资料，请稍后再问。"
+                arguments = {"room_id": room, "mention_id": message_id, "text": "本机 Codex 代答｜" + reply}
+                if lease:
+                    arguments["lease_id"] = lease
+                CONNECTOR.call_tool("send_message", arguments)
+            if lease:
+                CONNECTOR.mention_job("complete", room, message_id, lease)
+            if state:
+                state[1]["last_answer"] = time.time()
+                ONBOARD.write_state(*state)
+        except (OSError, ValueError, KeyError, StopIteration, URLError) as exc:
+            print(f"代答任务暂不可用：{type(exc).__name__}", flush=True)
+            delay = 8
+            if lease:
+                try:
+                    CONNECTOR.mention_job("release", room, message_id, lease)
+                except (OSError, ValueError, KeyError):
+                    pass
+        finally:
+            queue.finish((room, message_id), legacy, delay)
 
 
 def main():

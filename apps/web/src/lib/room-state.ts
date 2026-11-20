@@ -50,7 +50,7 @@ export interface RoomState {
   messages: Array<Message | PendingMessage>;
   present: User[];
   /** Who is typing, with when we last heard so stale entries can expire. */
-  typing: Record<string, { user: User & { codexThinking?: true }; at: number }>;
+  typing: Record<string, { user: User & { codexThinking?: true; codexQueued?: true }; at: number }>;
   /** Whether the room has messages older than the timeline holds. */
   hasMore: boolean;
   /**
@@ -272,10 +272,10 @@ function withoutTyping(typing: RoomState["typing"], userId: string) {
 }
 
 /** Who is typing once the room has said that `frame`'s user started or stopped, heard at `now`. */
-export function typed(typing: RoomState["typing"], { user, typing: started, codexMentionId }: Extract<ServerFrame, { type: "typing" }>, now: number): RoomState["typing"] {
+export function typed(typing: RoomState["typing"], { user, typing: started, codexMentionId, codexQueued }: Extract<ServerFrame, { type: "typing" }>, now: number): RoomState["typing"] {
   const key = codexMentionId ? `codex:${user.id}:${codexMentionId}` : user.id;
   return started
-    ? { ...typing, [key]: { user: codexMentionId ? { ...user, codexThinking: true } : user, at: now } }
+    ? { ...typing, [key]: { user: codexMentionId ? { ...user, codexThinking: true, ...(codexQueued && {codexQueued}) } : user, at: now } }
     : withoutTyping(typing, key);
 }
 
