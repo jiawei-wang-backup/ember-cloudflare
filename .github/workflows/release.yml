@@ -8,7 +8,7 @@ name: Release
 # and no copy is offered it unless it asks for one (docs/self-hosting.md#betas).
 on:
   push:
-    branches: [main]
+    branches: [integration/beta7-cn]
   workflow_dispatch:
 
 permissions:

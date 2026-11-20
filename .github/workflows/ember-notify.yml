@@ -5,7 +5,7 @@ name: Ember notifications
 # the copies Deploy to Cloudflare makes, it posts nothing.
 on:
   push:
-    branches: [main]
+    branches: [integration/beta7-cn]
   # pull_request_target, not pull_request, so pull requests from forks have the secret too. It never
   # checks out their code, and their titles reach the script only as data, through the event's file.
   pull_request_target:

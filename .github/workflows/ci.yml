@@ -2,18 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [integration/beta7-cn]
   pull_request:
+    branches: [integration/beta7-cn]
 
 # The checks only read the repository, so their token can only read it.
 permissions:
   contents: read
 
-# Both jobs run only in Ember's own repository and on pull requests to it: the copies Deploy to
-# Cloudflare makes of it skip them, so they don't spend their owners' Actions minutes.
+# Both jobs run for the Chinese integration branch in this fork.
 jobs:
   check:
-    if: github.repository == 'NYLLON-SOFTWARE/ember-cloudflare'
+    if: github.repository == 'jiawei-wang-dev/ember-cloudflare'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -53,7 +53,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    if: github.repository == 'NYLLON-SOFTWARE/ember-cloudflare'
+    if: github.repository == 'jiawei-wang-dev/ember-cloudflare'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
