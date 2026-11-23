@@ -1148,6 +1148,26 @@ it("uses a Chinese project title and reuses the registered room in the LAN works
   }
 });
 
+it("reuses an explicitly bound open project channel", async () => {
+  const { member, administrator } = await setUpOn();
+  const room = await createRoom("Existing project", {as: administrator});
+  const token = (await connected(member, {scope:"read write private create_project_channels"}, [], ["private", "create_project_channels"])).tokens.access_token;
+  const original = await runInDurableObject(workspaceStub(), instance => {
+    const object = instance as unknown as {env: Env};
+    const original = object.env;
+    object.env = {...original, PULSE_TEAM_PROJECT_CHANNELS:"true",
+      PULSE_ROOMS:JSON.stringify({[room.id]:{projectId:"example/existing"}})};
+    return original;
+  });
+  try {
+    const result = await found<{room:{id:string;kind:string}}>(token, "create_project_channel", {repository:"example/existing"});
+    expect(result.room).toMatchObject({id:room.id,kind:"open"});
+    expect((await roomsFor(token)).filter(r => r.name === "Existing project")).toHaveLength(1);
+  } finally {
+    await runInDurableObject(workspaceStub(), instance => void ((instance as unknown as {env: Env}).env = original));
+  }
+});
+
 it("shows a structured mention to its recipient and posts only one visible Codex reply", async () => {
   const {member, administrator} = await setUpOn();
   const token = (await connected(member, {scope: "read write"})).tokens.access_token;

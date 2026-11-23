@@ -52,7 +52,8 @@ def collector(action, work, sources, excluded=None, label=None, github_login=Non
             for flag, value in (("ExcludeSessionId", excluded), ("Label", label), ("GitHubLogin", github_login)):
                 if value:
                     parameters.append(f"-{flag} {quote(value)}")
-        command = ["powershell.exe", "-NoProfile", "-Command",
+        shell = shutil.which("pwsh") or "powershell.exe"
+        command = [shell, "-NoProfile", "-Command",
                    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; & "
                    + quote(PACKAGE / "pulse-report.ps1") + " " + " ".join(parameters)]
     else:
@@ -287,6 +288,8 @@ def start_listener():
         raise ValueError("Ember 网页授权缺少读取频道或发送消息权限")
     for room in sorted(rooms):
         connector.call_tool("read_room", {"room_id": room})
+    with connector.mention_stream(sorted(rooms), 0):
+        pass
     PENDING.mkdir(mode=0o700, exist_ok=True)
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if sys.platform == "win32" else {"start_new_session": True}
     with (PENDING / "ember-member-listener.log").open("ab") as log:
@@ -296,7 +299,7 @@ def start_listener():
     exit_code = process.poll()
     if exit_code not in (None, 3):
         raise OSError("本机 Codex 监听启动失败，请查看 .pulse-pending/ember-member-listener.log")
-    return "已运行"
+    return "已有监听进程" if exit_code == 3 else "监听已启动"
 
 
 def check_listener(result):
@@ -309,15 +312,26 @@ def check_listener(result):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["links", "bind-channels", "sync-ember", "start-listener", "prepare", "submit"])
+    parser.add_argument("action", choices=["links", "preflight", "bind-channels", "sync-ember", "start-listener", "prepare", "submit"])
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--exclude-session-id", type=lambda value: str(uuid.UUID(value)))
     parser.add_argument("--label")
     parser.add_argument("--github-login")
     args = parser.parse_args()
-    result = {"ember": EMBER, "project_pulse": PULSE}
+    result = {"ember": EMBER, "ember_oauth": load_connector().ORIGIN, "project_pulse": PULSE}
     try:
-        if args.action == "bind-channels":
+        if args.action == "preflight":
+            result["codex_cli"] = bool(shutil.which("codex"))
+            result["github_cli"] = bool(shutil.which("gh"))
+            if sys.platform == "win32":
+                collector("DeviceProof", None, [])
+            else:
+                perl = shutil.which("perl")
+                if not perl or not shutil.which("curl"):
+                    raise OSError("缺少 Perl 或 curl")
+                subprocess.run([perl, "-MJSON::PP", "-MDigest::SHA", "-e", "1"], check=True, timeout=10)
+            result["collector_ready"] = True
+        elif args.action == "bind-channels":
             result["channels"] = bind_project_channels()
             if any("error" in channel for channel in result["channels"]):
                 raise ValueError("部分项目频道未绑定，请核对频道权限和仓库归属后重试")
@@ -351,8 +365,21 @@ def main():
                     result["ember_error"] = str(exc)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
         result["error"] = str(exc)
+    binding = result.get("ember_reporting_member", {})
+    listener = result.get("ember_member_listener")
+    if args.action in ("bind-channels", "sync-ember", "submit", "start-listener"):
+        incomplete = []
+        if "ember_member_listener_error" in result or (listener and listener not in ("已有监听进程", "监听已启动")):
+            incomplete.append("ember_member_listener")
+        if binding and binding.get("status") != "bound":
+            if args.action != "bind-channels" or binding.get("status") != "waiting_for_report":
+                incomplete.append("ember_reporting_member")
+        if "ember_error" in result or any("error" in item for item in result.get("ember_posts", [])):
+            incomplete.append("ember_posts")
+        if incomplete:
+            result["incomplete"] = incomplete
     print(json.dumps(result, ensure_ascii=True))
-    return 1 if "error" in result or (args.action == "start-listener" and "ember_member_listener_error" in result) else 0
+    return 1 if "error" in result else 2 if result.get("incomplete") else 0
 
 
 if __name__ == "__main__":

@@ -62,6 +62,8 @@ def repository_context(project, question, allowed, previous=""):
         repo = github_get(base)
         if repo["full_name"].lower() != repository.lower():
             return {"repository_note": "GitHub 返回的仓库与项目绑定不一致。"}
+        if repo.get("visibility") != "public":
+            return {"repository_note": "该仓库的代码和文档仅供私有查阅，频道代答使用已上报的项目资料。"}
         branch = quote(repo["default_branch"], safe="")
         sha = github_get(f"{base}/commits/{branch}")["sha"]
         if not re.fullmatch(r"[a-f0-9]{40}", sha):

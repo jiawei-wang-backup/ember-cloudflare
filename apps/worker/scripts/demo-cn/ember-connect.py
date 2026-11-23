@@ -137,7 +137,7 @@ def mcp(message, protocol=None, *, refresh=True):
     return authorized(lambda token: request("/mcp", message, token=token, protocol=protocol), refresh=refresh)
 
 
-def mention_events(rooms, after, still_bound):
+def mention_stream(rooms, after):
     if not rooms:
         raise ValueError("需要已绑定的项目频道")
     query = [("room", room) for room in rooms]
@@ -147,9 +147,15 @@ def mention_events(rooms, after, still_bound):
         headers = {"Authorization": "Bearer " + token, "Accept": "text/event-stream", "Last-Event-ID": str(after)}
         return connection().open(Request(ORIGIN + path, headers=headers), timeout=25)
 
-    with authorized(open_stream) as stream:
-        if stream.headers.get_content_type() != "text/event-stream":
-            raise ValueError("Ember 代答推送格式错误")
+    stream = authorized(open_stream)
+    if stream.headers.get_content_type() != "text/event-stream":
+        stream.close()
+        raise ValueError("Ember 代答推送格式错误")
+    return stream
+
+
+def mention_events(rooms, after, still_bound):
+    with mention_stream(rooms, after) as stream:
         fields = {}
         for raw in stream:
             if raw.startswith(b":") and not still_bound():

@@ -304,7 +304,7 @@ const SENDING: Tool[] = [
 const CHANNEL_CREATION: Tool[] = [{
   name: "create_project_channel",
   title: "Create a private project channel",
-  description: "Creates the private project channel for a confirmed GitHub repository, or returns the matching private project channel you are already in. Only you are added to a new channel.",
+  description: "Returns the matching project channel you are already in, or creates a private channel for the confirmed GitHub repository.",
   takes: {
     repository: {type: "string", description: "The confirmed GitHub repository, owner/name."},
     project_name: {type: "string", description: "A Chinese display name for the project, without the repository suffix."},
@@ -319,7 +319,7 @@ const CHANNEL_CREATION: Tool[] = [{
       throw new Refused("Give a Chinese project name of up to 48 characters.");
     const room = await workspace(env).outsideProjectChannel(access, repository.toLowerCase(), projectName);
     if (room === "forbidden") throw new Refused("Channel creation needs project channel and private room permissions, and permission to create rooms in Ember.");
-    if (room === "ambiguous") throw new Refused("More than one private project channel uses this repository name.");
+    if (room === "ambiguous") throw new Refused("More than one project channel uses this repository name.");
     return {room: shownRoom(room, access.userId)};
   },
 }];

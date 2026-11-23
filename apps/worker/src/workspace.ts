@@ -3370,20 +3370,24 @@ export class Workspace extends DurableObject<Env> {
       if (!connections.some(connection => connection.id === connectionId)) return "forbidden";
       const sharedProjects = this.env.PULSE_TEAM_PROJECT_CHANNELS === "true";
       const legacyName = `项目 · ${repository}`;
-      const rooms = (await this.store.roomsFor(userId)).rooms.flatMap(room => room.kind === "closed" ? [room] : []);
+      const rooms = (await this.store.roomsFor(userId)).rooms.flatMap(room =>
+        room.kind === "closed" || (sharedProjects && room.kind === "open") ? [room] : []);
       let configured: Record<string, {projectId?: string}> = {};
       if (sharedProjects) {
         try { configured = JSON.parse(this.env.PULSE_ROOMS || "{}"); } catch { return "forbidden"; }
       }
-      const projectRooms = rooms.filter(room => room.channelGroup === "project" || configured[room.id]);
+      const projectRooms = rooms.filter(room => configured[room.id] || (room.kind === "closed" && room.channelGroup === "project"));
       const registered = await this.teamProjectBindings(projectRooms.map(room => room.id));
       const existing = projectRooms.filter(room =>
         configured[room.id]?.projectId?.toLowerCase() === repository ||
         (room.channelGroup === "project" && (registered[room.id]?.repository === repository || (!registered[room.id] && room.name.toLowerCase() === legacyName))));
       if (existing.length > 1) return "ambiguous";
+      if (Object.entries(configured).some(([id, binding]) =>
+        binding.projectId?.toLowerCase() === repository && !existing.some(room => room.id === id))) return "forbidden";
       const room = existing[0];
+      if (room?.kind === "open") return {...room, channelGroup: "project"};
       if (room?.kind === "closed") {
-        if (sharedProjects) {
+        if (sharedProjects && !configured[room.id]) {
           const binding = registered[room.id];
           const settings = binding && await this.store.roomSettings(room.id, userId);
           const ownerId = binding?.ownerId ?? settings?.creatorId;
@@ -3462,7 +3466,23 @@ export class Workspace extends DurableObject<Env> {
     const user = await this.authenticate(credentials);
     if (!user) return null;
     if (roomId !== null && !(await this.store.isMember(roomId, user.id))) return "not found";
-    return this.store.mentionable(query, roomId, user.id, priority);
+    const project = roomId === null ? undefined : pulseBinding(this.env, roomId) ?? (await this.teamProjectBindings([roomId]))[roomId];
+    const people = await this.store.mentionable(query, roomId, user.id, priority, project ?? undefined);
+    const assistant = roomId && await this.projectAssistant(roomId);
+    if (!assistant) return people;
+    const visible = people.filter(person => person.id !== ASSISTANT_ID);
+    const search = query.trim().toLowerCase();
+    if (search && ASSISTANT_NAME.toLowerCase().includes(search) && !visible.some(person => person.id === assistant.id)) {
+      return [assistant, ...visible].slice(0, 20);
+    }
+    return visible;
+  }
+
+  private async projectAssistant(roomId: RoomId): Promise<DirectoryEntry | null> {
+    if (!this.env.JUXON_API_KEY || (!pulseBinding(this.env, roomId) && !(await this.teamProjectBindings([roomId]))[roomId])) return null;
+    const assistant = (await this.store.agentEntries()).find(person =>
+      person.name === "项目助手" && person.status === "active" && person.keptFor === null);
+    return assistant && await this.store.isMember(roomId, assistant.id) ? assistant : null;
   }
 
   /**
@@ -4953,7 +4973,10 @@ export class Workspace extends DurableObject<Env> {
     const { marks, active, pushes, webhooks, asks } = await this.store.applyRoomEvents(roomId, events, viewerIds, pushing, guestSignIn(this.env));
     for (const [userId, at] of marks) this.tell([userId], at === null ? { type: "room.read", roomId } : { type: "room.unread", roomId, at });
     if (active) this.tell(active.userIds, { type: "room.active", roomId, at: active.at });
-    return { pushes, webhooks, asks };
+    const projectAssistant = asks.some(ask => ask.botId === ASSISTANT_ID) && await this.projectAssistant(roomId);
+    if (!projectAssistant) return { pushes, webhooks, asks };
+    const routed = asks.map(ask => ask.botId === ASSISTANT_ID ? {...ask, botId: projectAssistant.id} : ask);
+    return {pushes, webhooks, asks: [...new Map(routed.map(ask => [ask.messageId + ":" + ask.botId, ask])).values()]};
   }
 
   /**

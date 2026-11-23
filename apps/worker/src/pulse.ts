@@ -18,7 +18,7 @@ function demoSnapshot(env: Env, projectId: string, days: number, source: URL): P
   } catch { return null; }
 }
 
-export function pulseBinding(env: Env, roomId: string): {projectId: string; memberIds: string[]; allRoomMembers?: boolean} | null {
+export function pulseBinding(env: Env, roomId: string): {projectId: string; memberIds: string[]; allRoomMembers?: boolean; ownerId?: UserId} | null {
   try {
     const value = JSON.parse(env.PULSE_ROOMS || "{}")[roomId];
     const validId = env.PULSE_SOURCE === "dashboard" ? /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(value?.projectId) : /^[0-9a-f-]{36}$/i.test(value?.projectId);
