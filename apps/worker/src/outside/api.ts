@@ -209,12 +209,15 @@ async function codexMentions(request: Request, env: Env): Promise<Response> {
   const access = token === null ? null : await work.outsideAccess(await tokenDigest(token, env.SESSION_SECRET));
   if (!access || access === "off" || access.resource !== resourceAt(urlOf(request).origin)) return unauthorized(request, token !== null);
   if (!access.scopes.includes("private") || !access.scopes.includes("write"))
-    return Response.json({error: "Project channel read and write access is required."}, {status: 403, headers: PRIVATE});
+    return Response.json({error: "Private channel and write access is required."}, {status: 403, headers: PRIVATE});
   if (request.method === "GET") {
-    const rooms = [...new Set(urlOf(request).searchParams.getAll("room"))];
+    const params = urlOf(request).searchParams;
+    const rooms = [...new Set(params.getAll("room"))];
+    const allChannels = params.get("all_channels") === "1";
     const last = request.headers.get("Last-Event-ID") || "0";
     const after = Number(last);
-    if (!rooms.length || rooms.length > 100 || rooms.some(room => !isRoomId(room)) || !/^\d+$/.test(last) || !Number.isSafeInteger(after))
+    if (allChannels === (rooms.length > 0) || rooms.length > 100 || rooms.some(room => !isRoomId(room)) ||
+        !/^\d+$/.test(last) || !Number.isSafeInteger(after))
       return Response.json({error: "Invalid rooms or cursor."}, {status: 400, headers: PRIVATE});
     return work.codexMentionStream(access, rooms, after);
   }

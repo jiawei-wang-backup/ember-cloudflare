@@ -138,7 +138,8 @@ def mcp(message, protocol=None, *, refresh=True):
 
 
 def mention_events(rooms, after):
-    path = "/api/codex/mentions?" + urlencode([("room", room) for room in rooms])
+    query = {"all_channels": "1"} if rooms is None else [("room", room) for room in rooms]
+    path = "/api/codex/mentions?" + urlencode(query)
 
     def open_stream(token):
         headers = {"Authorization": "Bearer " + token, "Accept": "text/event-stream", "Last-Event-ID": str(after)}

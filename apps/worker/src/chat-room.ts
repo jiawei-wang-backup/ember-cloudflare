@@ -748,7 +748,8 @@ export class ChatRoom extends DurableObject<Env> {
       const message = await this.findUndeleted(store, messageId);
       if (!message || message.creator.id === user.id || !message.mentions.some(person => person.id === user.id) ||
           (await store.storedClientMessageIds(user, ["member-codex-" + messageId])).length) return null;
-      return {id: message.id, text: message.plainText, mention_from_id: message.creator.id, mention_recipient_id: user.id};
+      return {id: message.id, text: message.plainText, mention_from_id: message.creator.id, mention_recipient_id: user.id,
+        ...(message.parentId && {reply_to: message.parentId})};
     });
   }
 

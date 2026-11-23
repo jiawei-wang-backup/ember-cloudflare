@@ -3,7 +3,6 @@ import { hasWords, HISTORY_PAGE_SIZE, MAX_SEARCH_LENGTH, MESSAGE_TOO_LONG, sanit
 import type { OutsideScope } from "@ember/protocol/outside";
 import { markdownHtml, MAX_MARKDOWN_LENGTH } from "../bots/markdown";
 import type { Env } from "../env";
-import { pulseBinding } from "../pulse";
 import { searchIndex } from "../search-index";
 import { matchesOf } from "../searches";
 import { workspace, type OutsideAccess } from "../workspace";
@@ -189,7 +188,7 @@ const ROOM_ID = { type: "string", description: "The room's id, as list_rooms giv
 const CODEX_THINKING: Tool = {
   name: "set_codex_thinking",
   title: "Set member Codex thinking status",
-  description: "Shows or clears a temporary status in a private project channel for a message that mentioned you.",
+  description: "Shows or clears a temporary status in a channel for a message that mentioned you.",
   takes: {
     room_id: ROOM_ID,
     mention_id: {type: "string", description: "The message that mentioned you."},
@@ -201,8 +200,7 @@ const CODEX_THINKING: Tool = {
     if (typeof mentionId !== "string" || !/^[a-z0-9]{16}$/.test(mentionId) || typeof thinking !== "boolean" || (queued !== undefined && typeof queued !== "boolean"))
       throw new Refused("Give a valid mention_id and a thinking status.");
     const room = await roomOf(env, access, roomId);
-    if (room.kind !== "closed" || (room.channelGroup !== "project" && !pulseBinding(env, room.id)))
-      throw new Refused(NO_ROOM);
+    if (room.kind === "direct") throw new Refused(NO_ROOM);
     const work = workspace(env);
     if (queued && !(await work.codexMentionStillQueued(access.userId, room.id, mentionId))) return {shown: false};
     const sender = await work.outsideSender(access, room.id, true);

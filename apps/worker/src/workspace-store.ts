@@ -1528,6 +1528,15 @@ export const ROOMS_FOR_USER = `SELECT rooms.id, rooms.kind, rooms.name, rooms.ic
   FROM memberships JOIN rooms ON rooms.id = memberships.room_id
   WHERE memberships.user_id = ? ORDER BY memberships.created_at, rooms.created_at, rooms.id`;
 
+const CODEX_CHANNELS_FOR_USER = `SELECT rooms.id
+  FROM memberships JOIN rooms ON rooms.id = memberships.room_id JOIN users ON users.id = memberships.user_id
+  WHERE memberships.user_id = ? AND rooms.kind IN ('open', 'closed') AND users.status = ${ACTIVE} AND users.role <> ${BOT}`;
+
+const CODEX_CHANNEL_MEMBERS = `SELECT memberships.user_id
+  FROM json_each(?2) JOIN memberships ON memberships.user_id = json_each.value
+  JOIN rooms ON rooms.id = memberships.room_id JOIN users ON users.id = memberships.user_id
+  WHERE memberships.room_id = ?1 AND rooms.kind IN ('open', 'closed') AND users.status = ${ACTIVE} AND users.role <> ${BOT}`;
+
 /** The ids of the rooms in `rows` that the shared order ranks, in its order. */
 const sharedOrderOf = (rows: SidebarRow[]): RoomId[] =>
   rows
@@ -4013,6 +4022,15 @@ export class WorkspaceStore {
   async roomAccess(roomId: RoomId, userId: UserId, ipAddress: string | null): Promise<{ member: boolean; banned: boolean }> {
     const [row] = await this.db.all<{ member: number; banned: number }>(ROOM_ACCESS, roomId, userId, ipAddress);
     return { member: row!.member === 1, banned: row!.banned === 1 };
+  }
+
+  async codexChannelsFor(userId: UserId): Promise<RoomId[]> {
+    return (await this.db.all<{id: RoomId}>(CODEX_CHANNELS_FOR_USER, userId)).map(({id}) => id);
+  }
+
+  async codexChannelMembers(roomId: RoomId, users: UserId[]): Promise<UserId[]> {
+    if (users.length === 0) return [];
+    return userIdsOf(await this.db.all<UserIdRow>(CODEX_CHANNEL_MEMBERS, roomId, JSON.stringify(users)));
   }
 
   /** Everyone active who can be put in a room, by name (`ACTIVE_PEOPLE`). */

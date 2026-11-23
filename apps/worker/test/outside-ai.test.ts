@@ -1181,7 +1181,7 @@ it("shows a structured mention to its recipient and posts only one visible Codex
   } finally {socket.close();}
 });
 
-it("pushes project mentions and replays unfinished jobs while only one OAuth client can claim them", async () => {
+it.each(["project", "open", "closed"] as const)("pushes %s channel mentions and replays unfinished jobs while only one OAuth client can claim them", async (kind) => {
   const { member, administrator } = await setUpOn();
   const scope = "read write private create_project_channels";
   const token = (await connected(member, {scope}, [], ["private", "create_project_channels"])).tokens.access_token;
@@ -1196,12 +1196,16 @@ it("pushes project mentions and replays unfinished jobs while only one OAuth cli
   const headers = (bearer: string) => ({Authorization: `Bearer ${bearer}`});
   const eventPath = "/api/codex/mentions";
   try {
-    const {room} = await found<{room: {id: string}}>(token, "create_project_channel",
-      {repository: "example/realtime", project_name: "实时验证"});
+    const room = kind === "project"
+      ? (await found<{room: {id: string}}>(token, "create_project_channel",
+        {repository: "example/realtime", project_name: "实时验证"})).room
+      : await createRoom("General discussion", {as: administrator,
+        ...(kind === "closed" && {closedTo: [administrator.user.id, member.user.id]})});
     const socket = await connect(room.id, administrator);
     const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
     async function stream(after = "0") {
-      const response = await apiWith(bindings, `${eventPath}?room=${room.id}`, {headers: {...headers(token), "Last-Event-ID": after}});
+      const path = kind === "project" ? `${eventPath}?room=${room.id}` : `${eventPath}?all_channels=1`;
+      const response = await apiWith(bindings, path, {headers: {...headers(token), "Last-Event-ID": after}});
       expect(response.status).toBe(200);
       expect(response.headers.get("Content-Type")).toContain("text/event-stream");
       const reader = response.body!.getReader();
@@ -1220,10 +1224,18 @@ it("pushes project mentions and replays unfinished jobs while only one OAuth cli
     }
     const job = async (bearer: string, messageId: string, action: string, leaseId?: string) =>
       (await apiWith(bindings, eventPath, {method:"POST", headers:{...headers(bearer),"Content-Type":"application/json"},
-        body:JSON.stringify({roomId: room.id, messageId, action, leaseId})})).json() as Promise<{status?:string; leaseId?:string; accepted?:boolean}>;
+        body:JSON.stringify({roomId: room.id, messageId, action, leaseId})})).json() as Promise<{
+          status?: string; leaseId?: string; accepted?: boolean; question?: {reply_to?: string};
+        }>;
     try {
+      if (kind === "project") {
+        expect((await apiWith(bindings, eventPath, {headers: headers(token)})).status).toBe(400);
+        expect((await apiWith(bindings, `${eventPath}?all_channels=1&room=${room.id}`, {headers: headers(token)})).status).toBe(400);
+      }
       const reader = await stream();
-      const question = await post(socket, `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment>解释项目</p>`);
+      const markup = `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment>解释项目</p>`;
+      const root = kind === "project" ? undefined : await post(socket, "<p>当前讨论的背景</p>");
+      const question = root ? await reply(socket, root, markup) : await post(socket, markup);
       const live = await event(reader);
       expect(live).toContain(question.id);
       expect(live).not.toContain("解释项目");
@@ -1232,9 +1244,14 @@ it("pushes project mentions and replays unfinished jobs while only one OAuth cli
       expect(claims.map(claim => claim.status).sort()).toEqual(["busy", "claimed"]);
       const winner = claims[0].status === "claimed" ? token : other;
       const loser = winner === token ? other : token;
-      const lease = claims.find(claim => claim.leaseId)!.leaseId!;
+      const claimed = claims.find(claim => claim.leaseId)!;
+      const lease = claimed.leaseId!;
+      expect(claimed.question?.reply_to).toBe(root?.id);
       expect(await job(loser, question.id, "complete", lease)).toEqual({accepted:false});
       expect(await event(await stream(cursor))).toContain(question.id);
+      const sent = await found<{message: {reply_to: string}}>(winner, "send_message",
+        {room_id: room.id, mention_id: question.id, lease_id: lease, text: "收到，以下是背景。"});
+      expect(sent.message.reply_to).toBe(root?.id ?? question.id);
       expect(await job(winner, question.id, "complete", lease)).toEqual({accepted:true});
       expect(await job(loser, question.id, "claim")).toEqual({status:"gone"});
     } finally {

@@ -1666,18 +1666,19 @@ export class Workspace extends DurableObject<Env> {
     return (await this.outside.connectionsOf(person.user.id, new Date().toISOString())).map(shownConnection);
   }
 
-  private async codexProjectRoom(userId: UserId, roomId: RoomId): Promise<boolean> {
-    const found = await this.store.roomToChange(roomId, userId);
-    return found?.room.kind === "closed" && (found.room.channelGroup === "project" || Boolean(pulseBinding(this.env, roomId)));
+  private async canAnswerCodexMention(userId: UserId, roomId: RoomId): Promise<boolean> {
+    return (await this.store.codexChannelMembers(roomId, [userId])).length > 0;
   }
 
   async codexMentionStream(access: OutsideAccess, rooms: RoomId[], after: number): Promise<Response> {
-    const found = await Promise.all(rooms.map(async id => [id, await this.codexProjectRoom(access.userId, id)] as const));
-    return this.codexMentions.stream(access.userId, new Set(found.flatMap(([id, allowed]) => allowed ? [id] : [])), after);
+    const requested = new Set(rooms);
+    const channels = await this.store.codexChannelsFor(access.userId);
+    const subscribed = requested.size === 0 ? channels : channels.filter(id => requested.has(id));
+    return this.codexMentions.stream(access.userId, new Set(subscribed), after);
   }
 
   async claimCodexMention(access: OutsideAccess, roomId: RoomId, messageId: string) {
-    if (!(await this.codexProjectRoom(access.userId, roomId))) return {status: "gone" as const};
+    if (!(await this.canAnswerCodexMention(access.userId, roomId))) return {status: "gone" as const};
     return this.codexMentions.claim(access.userId, access.connectionId, roomId, messageId);
   }
 
@@ -1687,7 +1688,7 @@ export class Workspace extends DurableObject<Env> {
 
   async changeCodexMentionLease(access: OutsideAccess, roomId: RoomId, messageId: string, leaseId: string,
     action: "renew" | "complete" | "release"): Promise<boolean> {
-    if (action === "renew" && !(await this.codexProjectRoom(access.userId, roomId))) return false;
+    if (action === "renew" && !(await this.canAnswerCodexMention(access.userId, roomId))) return false;
     return this.codexMentions.changeLease(access.userId, access.connectionId, roomId, messageId, leaseId, action);
   }
 
@@ -4927,14 +4928,21 @@ export class Workspace extends DurableObject<Env> {
   async applyRoomEvents(roomId: RoomId, events: RoomEvent[], viewerIds: UserId[]): Promise<RoomEventDeliveries> {
     if (events.length === 0) return { pushes: [], webhooks: [], asks: [] };
     if (this.env.PULSE_TEAM_PROJECT_CHANNELS === "true") {
-      const eligible = new Map<UserId, boolean>();
+      const recipients = new Set<UserId>();
       for (const {userId, message} of events) {
         if (!message) continue;
         for (const recipient of message.mentionIds) {
           if (recipient === userId || recipient === ASSISTANT_ID) continue;
-          const allowed = eligible.get(recipient) ?? await this.codexProjectRoom(recipient, roomId);
-          eligible.set(recipient, allowed);
-          if (allowed) await this.codexMentions.add(recipient, roomId, message.id);
+          recipients.add(recipient);
+        }
+      }
+      if (recipients.size) {
+        const eligible = new Set(await this.store.codexChannelMembers(roomId, [...recipients]));
+        for (const {userId, message} of events) {
+          if (!message) continue;
+          for (const recipient of message.mentionIds) {
+            if (recipient !== userId && eligible.has(recipient)) await this.codexMentions.add(recipient, roomId, message.id);
+          }
         }
       }
     }
