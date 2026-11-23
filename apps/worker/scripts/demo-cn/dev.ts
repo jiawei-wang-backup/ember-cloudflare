@@ -11,6 +11,7 @@ import { projectSnapshots } from "./project-snapshots.ts";
 import { handleProjectBot } from "./pulse-bot.ts";
 import {handleProjectAssistantChat} from "./project-assistant-chat.ts";
 import { handleDemoBot } from "./demo-bot.ts";
+import { people } from "./data.ts";
 import { companyPilotLedger, companyPilotRepo, pilotRepo, syncPilotPRs } from "./pr-pilot.ts";
 
 // The Worker stays on loopback; --lan exposes only the application proxy with the same demo state.
@@ -18,6 +19,8 @@ const root = path.resolve(import.meta.dirname, "../../../..");
 export const origin = "http://localhost:5174";
 export const identity = "ember-demo-cn-v1";
 const state = path.join(root, ".wrangler/demo-cn");
+const demoEmailByLogin = new Map<string, string>(people.flatMap(([key, , , loginAliases]) =>
+  loginAliases.map(alias => [alias, `${key}@demo.example.com`] as const)));
 const lan = process.argv.slice(2).includes("--lan");
 const tlsDir = lan ? process.env.EMBER_LAN_TLS_DIR : undefined;
 const tlsProxyKey = tlsDir && readFileSync(path.join(tlsDir, "proxy-key"), "utf8").trim();
@@ -89,8 +92,9 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
       accounts: {emailAddress: string; loginAlias?: string; loginAliases?: string[]}[]; password: string;
     };
     const login = typeof emailAddress === "string" ? emailAddress.trim().toLowerCase() : "";
+    const resolvedLogin = demoEmailByLogin.get(login) ?? login;
     const account = login === "admin" ? accounts[0] : accounts.find(person =>
-      person.emailAddress.toLowerCase() === login ||
+      person.emailAddress.toLowerCase() === resolvedLogin ||
       person.loginAliases?.includes(login) ||
       person.loginAlias === login);
     if (!account) {reply(401, "请使用已有的演示账号。"); return;}
