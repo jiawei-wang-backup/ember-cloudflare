@@ -21,7 +21,7 @@
 
 ## 中文局域网接入
 
-**[下载 r22 客户端 ZIP](docs/lan-client/project-pulse-report-3.6.0-lan-r22.zip)** · [下载接入提示词 TXT](docs/lan-client/ember-lan-onboarding-r22.txt)
+**[下载 r22 客户端 ZIP](docs/lan-client/project-pulse-report-3.6.0-lan-r22.zip)**
 
 ZIP 的 SHA-256 为 `cad574d594f6cbde6fd04508d508e74df245a7c635b590baa78bc2c3454c82fb`。
 
@@ -29,8 +29,7 @@ ZIP 的 SHA-256 为 `cad574d594f6cbde6fd04508d508e74df245a7c635b590baa78bc2c3454
 
 当前分支的服务端仅支持已绑定项目频道的成员代答。r22 可检测全频道订阅能力，实际可用范围以服务端支持和真实频道测试为准。
 
-<details>
-<summary>展开并复制完整接入提示词</summary>
+### 可直接复制的接入提示词
 
 ```text
 请直接完成接入。用当前解压目录的 README.md、PROMPT.txt、project-selection.md 和包内工具，不要让我手填服务端地址、编辑配置或另发提示词。
@@ -62,8 +61,6 @@ Windows 升级后先停掉旧版代答监听，再用新版脚本启动监听。
 3. 分列批次、usage_verified、三类 Token、PR/状态回执、项目记录读回、频道发布或无新进展。无新增日志时区分已验证无变化和未找到授权来源。禁止用 Ember send_message 手工发送进展来替代 Project Pulse 试报或补齐缺失回执；已有消息无需重发。以 submit / sync-ember 的 ember_posts 和 ember_error 核对发布。
 4. 在选择确认前告知成员：新版监听接受本人可访问的公开或私有频道中的真实 @；已绑定项目频道按该项目的历史和 GitHub 选项取材，其他频道仅用当前问题及其讨论串。普通频道不会因此加入项目选择。升级时先核对旧进程的脚本路径，停止该监听，再从永久目录启动新版，保留原授权、绑定与续传数据。verify-projects 的 all_channel_stream 表示服务端全频道 SSE 能力；HTTP 400/404 时核对 Worker 是否部署了全频道支持，旧服务端可能仅能监听已绑定频道。另核对本机实际进程的路径和版本；单有监听进程或 SSE 200 均不能证明已回复。分别在已绑定和普通频道由另一位真实成员 @ 验收，并在连续两问时观察排队、思考提示和两条对应回复。
 ```
-
-</details>
 
 ## Why Ember
 
