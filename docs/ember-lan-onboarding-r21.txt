@@ -1,0 +1,62 @@
+你在 Mac 上接入 Windows 電腦已經部署好的 Ember／Project Pulse 中文區域網路服務。這一輪只做「空資料接入」驗證，不要接入任何專案資料。
+
+固定服務端（Windows 電腦 192.168.16.70）：
+- Ember 工作區：http://192.168.16.70:5174
+- Ember HTTPS 授權：https://192.168.16.70:5443
+- Project Pulse：http://192.168.16.70:4185
+
+r21 的成員 Codex 只會在本機已綁定的項目頻道代答；舊客戶端請升級監聽腳本。
+完成空資料驗證後，只有收到使用者明確要求正式接入時，才另行依包內 README.md、project-selection.md 和 PROMPT.txt 選擇項目。升級既有正式接入時，保留授權與續傳狀態，替換腳本、停止舊監聽，再用 `python3 pulse-onboard.py sync-ember` 核對 `ember_reporting_member` 和 `ember_member_listener`。用兩位成員驗證：綁定頻道中的 @ 能收到本人 Codex 代答，未綁定頻道中的 @ 由一般聊天處理。項目助手和 Pulse 產出同步由 Windows 服務端提供。
+
+版本與帳號：
+- 使用 lan-client-v3.6.0-r21 接入包，VERSION 應為 3.6.0。
+- 目前只有下列 9 位成員，全部擁有管理員權限。`admin` 與 `wjw` 是同一個帳號的兩個登入名，不另計為第 10 位成員。
+
+| 登入名 | 姓名 |
+|---|---|
+| `admin` / `wjw` | 王佳炜 |
+| `ljg` | 刘继光 |
+| `ch` | 陈航 |
+| `lhy` | 刘海颖 |
+| `skf` | 史可凡 |
+| `zzh` | 郑子豪 |
+| `zd` | 赵栋 |
+| `test1` | 测试管理员 |
+| `test2` | 测试管理员 |
+
+- 登入時只填 Ember 登入名，不填電子郵件。`test1` 是有效登入名，對應測試管理員。
+- 由使用者本人在瀏覽器輸入登入資訊。不要代填、索取、讀取或記錄密碼、Token、Cookie 或其他憑證。
+
+固定條件：
+- Windows 電腦是服務端。Mac 只作為客戶端，不複製 Ember／Project Pulse 原始碼，不安裝資料庫，不啟動 5174、5443 或 4185 服務端連接埠。
+- 專案資料必須保持空白：不上傳 Codex 工作階段、Token 用量、專案摘要、目標或里程碑；不選擇專案；不建立專案頻道；不執行準備上報或提交上報；不建立每 30 分鐘工作；不啟動成員代答監聽。
+- 不讀取、複製或遷移其他電腦的 `.pulse-project-selection.json`、`.pulse-state-*.json`、`.pulse-pending/`、Token、Cookie、密碼或私鑰。
+- 如果這個目錄已有非空專案選擇、待續傳批次或舊裝置狀態，停止寫入並列出具體檔案；不要自動續傳或清理。
+- 不要把任何 Token、OAuth 憑證、密碼或 GitHub 憑證寫進儲存庫、日誌或回覆。
+
+執行順序：
+1. 先讀 VERSION、README.md、UPGRADE.md、project-selection.md 和 SHA256SUMS，確認版本為 3.6.0/r21，並逐檔驗證 SHA-256。不要執行 PROMPT.txt 中會建立或接入專案的流程。
+2. 檢查 Python 3、Codex CLI 登入狀態和瀏覽器。只報告是否可用，不輸出憑證內容。
+3. 以短逾時只讀檢查三個服務根頁面，以及 Project Pulse 的 `/api/v1/report-directory`。執行 `python3 pulse-onboard.py links` 核對包內位址；任何位址與上面不一致時停止並報告。
+4. 如果 HTTPS 憑證不受信任，向使用者說明根憑證是包內的 `Ember-LAN-CA.pem`。在包目錄執行下列命令核對公開根憑證：
+   `openssl x509 -in ./Ember-LAN-CA.pem -noout -fingerprint -sha256`
+   輸出中等號後的 SHA-256 指紋必須是：
+   CA:51:9A:49:A2:90:1D:6B:90:42:B4:65:F2:FD:45:9F:37:5E:5A:57:EC:21:7F:C7:C1:84:AA:4D:5E:B0:91:4C
+   macOS 可在包目錄執行：
+   `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ./Ember-LAN-CA.pem`
+   撤銷時執行：
+   `sudo security remove-trusted-cert -d ./Ember-LAN-CA.pem`
+   只有核對指紋一致後才匯入；不要搬移或保存伺服器私鑰。
+5. 開啟 http://192.168.16.70:5174，請使用者從上表選擇本人登入名登入。只填登入名，不填電子郵件；不要索取或記錄密碼。
+6. 依套件流程發起 Ember HTTPS 網頁授權，讓使用者親自確認讀取頻道、存取專案頻道與傳送訊息權限。授權完成後只做唯讀工具探測，確認能列出頻道；不要傳送測試訊息。
+7. 檢查 Codex CLI 是否已經登入。GitHub CLI 未登入不影響空資料接入；不要索取或傳送任何 GitHub 憑證。
+8. 最後複查本機沒有生成專案選擇、上報批次、同步工作或代答監聽。不要為了讓檢查通過而建立空檔案、頻道或訊息。
+
+完成後的回報只包含：
+- ZIP 版本和 SHA-256 驗證結果。
+- Python、Codex CLI、Ember 登入、Ember OAuth、頻道讀取和三個服務位址的可用狀態。
+- 目前 Ember 登入帳號和授權範圍，不含任何 Token 或密碼。
+- 是否確認專案選擇、待上報批次、每 30 分鐘工作和代答監聽均為「無」。
+- 失敗項的具體錯誤和可重試步驟。
+
+任何失敗都要停在對應步驟並如實回報；只有空資料接入所需檢查全部通過後，才能回覆「空資料接入完成」。

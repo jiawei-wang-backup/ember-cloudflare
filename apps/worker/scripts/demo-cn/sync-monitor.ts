@@ -9,7 +9,8 @@ import {html,mention} from "../seed/markup.ts";
 import {localEmber,signIn,state,origin} from "./local.ts";
 import {roomHistory} from "./project-cards.ts";
 import {readMonitorSnapshot} from "./monitor-source.ts";
-import {textFile,original} from "./files.ts";
+import {textFile} from "./files.ts";
+import {userForm} from "../seed/client.ts";
 
 interface SyncState {rooms:Record<string,RoomId>;summaryRoom:RoomId;sourceProjects:string[];capturedAt:string}
 async function main(){
@@ -24,10 +25,10 @@ async function main(){
   const admin=sessions[0]!;
   const botList=await(await ember.request("/api/account/bots",{session:admin})).json() as Bots;
   const existing=botList.bots.find(b=>b.name==="Pulse 产出同步");
-  const form=new FormData();const image=original("deploy-bot.png","image/png");
-  const blob=new Blob([image.bytes as Uint8Array<ArrayBuffer>],{type:image.type});
-  form.set("user",JSON.stringify({name:"Pulse 产出同步"}));form.set("avatar",blob,image.name);form.set("variant",blob,image.name);
-  const bot=(await(await ember.request(existing?`/api/account/bots/${existing.id}`:"/api/account/bots",{method:existing?"PATCH":"POST",session:admin,body:form,expected:existing?[200]:[201]})).json() as BotAnswer).bot;
+  const form = userForm({name:"Pulse 产出同步"}, {
+    name:"delivery-sync.png", type:"image/png", bytes:readFileSync(new URL("./assets/delivery-sync.png", import.meta.url)),
+  });
+  const bot=(await(await ember.request(existing?`/api/account/bots/${existing.id}`:"/api/account/bots",{...form,method:existing?"PATCH":"POST",session:admin,expected:existing?[200]:[201]})).json() as BotAnswer).bot;
   const stateFile=path.join(state,"monitor-sync.json");
   const previous:SyncState|null=existsSync(stateFile)?JSON.parse(readFileSync(stateFile,"utf8")):null;
   const legacy=JSON.parse(readFileSync(path.join(state,"manifest.json"),"utf8"));
