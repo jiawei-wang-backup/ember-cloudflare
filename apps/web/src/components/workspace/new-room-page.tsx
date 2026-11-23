@@ -53,7 +53,11 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
   useEffect(() => {
     let stopped = false;
     fetchNewRoomForm().then(
-      (form) => !stopped && setPeople(form.people),
+      (form) => {
+        if (stopped) return;
+        setPeople(form.people);
+        setChosen(new Set(form.people.map((person) => person.id)));
+      },
       (error: unknown) => {
         // A page left before its form loads only reports a session that's ended, which goes to sign in.
         if (stopped && !isSignedOut(error)) return;
@@ -68,8 +72,8 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
 
   /** Creates the room and lists it in the sidebar. */
   const send = () => {
-    // The private form lists its creator with a check mark and sends them as one of its members.
-    const room: NewRoom = access === "open" ? { kind: access, name, icon: icon ?? "" } : { kind: access, name, icon: icon ?? "", memberIds: [me.id, ...chosen] };
+    // Private rooms start with everyone selected and still guarantee their creator is included.
+    const room: NewRoom = access === "open" ? { kind: access, name, icon: icon ?? "" } : { kind: access, name, icon: icon ?? "", memberIds: [...new Set([me.id, ...chosen])] };
     return createRoom(group ? {...room, channelGroup: group} : room).then((room) => {
       onCreated(room);
       setCreated(room);
@@ -97,7 +101,7 @@ export function NewRoomPage({ access, me, onCreated, onFailed }: Props) {
 
   // Anything filled in, or the other form, which the page didn't open on, until the room's made.
   const changed =
-    people !== null && !saving && !created && (name !== (group ? "" : DEFAULT_ROOM_NAME) || icon !== null || access !== opened || (access === "closed" && chosen.size > 0));
+    people !== null && !saving && !created && (name !== (group ? "" : DEFAULT_ROOM_NAME) || icon !== null || access !== opened || (access === "closed" && chosen.size !== people.length));
   return (
     // Go Back returns to Rooms and permissions.
     <SettingsPage back={workspaceSectionPath("channel-settings")}>

@@ -16,6 +16,13 @@ it("does not add a project panel to an unbound room",async()=>{
   await waitFor(()=>expect(screen.queryByRole("status")).not.toBeInTheDocument());
   expect(screen.queryByRole("region")).not.toBeInTheDocument();
 });
+it("keeps a visible statistics placeholder in compact room headers for an unbound project",async()=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(null,{status:404})));
+  render(<ProjectOverview roomId="room-unbound-compact" compact/>);
+  expect(await screen.findByRole("status")).toBeVisible();
+  await waitFor(()=>expect(screen.getByRole("status")).toHaveTextContent("此频道尚未绑定 Project Pulse"));
+  expect(screen.queryByRole("region")).not.toBeInTheDocument();
+});
 it("shows a permission error without displaying project data",async()=>{
   vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(null,{status:403})));
   render(<ProjectOverview roomId="room-b"/>);

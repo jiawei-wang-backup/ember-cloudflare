@@ -221,18 +221,29 @@ describe("Create a private room", () => {
     expect(screen.getByRole("switch", { name: "Give everyone access to this room" })).not.toBeChecked();
   });
 
-  it("lists you with a check mark and everyone else with a switch, off", async () => {
+  it("lists you with a check mark and everyone else with a switch, on", async () => {
     serve();
     showPage("/rooms/closeds/new");
     await roomName();
     expect(hasCheckMark(ada.name)).toBe(true);
     expect(within(rowOf(ada.name)).queryByRole("switch")).not.toBeInTheDocument();
     for (const person of [grace, linus]) {
-      expect(screen.getByRole("switch", { name: `Give ${person.name} access to this room` })).not.toBeChecked();
+      expect(screen.getByRole("switch", { name: `Give ${person.name} access to this room` })).toBeChecked();
     }
   });
 
-  it("creates a private room with you and the people chosen", async () => {
+  it("creates a private room with everyone by default", async () => {
+    const created = { id: "leads", name: "Leads", kind: "closed", icon: null } satisfies Room;
+    serve({ created });
+    const { onCreated, user } = showPage("/rooms/closeds/new");
+    await user.clear(await roomName());
+    await user.type(await roomName(), "Leads");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
+    expect(posted()).toEqual({ kind: "closed", name: "Leads", icon: "", memberIds: [ada.id, grace.id, linus.id] });
+  });
+
+  it("lets you remove people from the default private room membership", async () => {
     const created = { id: "leads", name: "Leads", kind: "closed", icon: null } satisfies Room;
     serve({ created });
     const { onCreated, user } = showPage("/rooms/closeds/new");
@@ -241,17 +252,18 @@ describe("Create a private room", () => {
     await user.click(screen.getByRole("switch", { name: `Give ${linus.name} access to this room` }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
-    expect(posted()).toEqual({ kind: "closed", name: "Leads", icon: "", memberIds: [ada.id, linus.id] });
+    expect(posted()).toEqual({ kind: "closed", name: "Leads", icon: "", memberIds: [ada.id, grace.id] });
   });
 
-  it("keeps who's chosen when Everyone goes on and off again", async () => {
+  it("keeps the default selections and exclusions when Everyone goes on and off again", async () => {
     serve();
     const { user } = showPage("/rooms/closeds/new");
     await user.click(await screen.findByRole("switch", { name: `Give ${grace.name} access to this room` }));
     await user.click(screen.getByRole("switch", { name: "Give everyone access to this room" }));
     expect(location.pathname).toBe("/rooms/opens/new");
     await user.click(screen.getByRole("switch", { name: "Give only some access to this room" }));
-    expect(screen.getByRole("switch", { name: `Give ${grace.name} access to this room` })).toBeChecked();
+    expect(screen.getByRole("switch", { name: `Give ${grace.name} access to this room` })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: `Give ${linus.name} access to this room` })).toBeChecked();
   });
 });
 
@@ -262,6 +274,15 @@ describe("Unsaved changes guard", () => {
     await roomName();
     act(() => navigate("/account/edit"));
     expect(location.pathname).toBe("/account/edit");
+  });
+
+  it("leaves an untouched private form without asking", async () => {
+    serve();
+    showPage("/rooms/closeds/new");
+    await roomName();
+    act(() => navigate("/account/edit"));
+    expect(location.pathname).toBe("/account/edit");
+    expect(asking()).not.toBeInTheDocument();
   });
 
   it("asks before leaving anything filled in, and leaves once it's discarded", async () => {
@@ -295,14 +316,13 @@ describe("Unsaved changes guard", () => {
     const created = { id: "leads", name: "Leads", kind: "closed", icon: null } satisfies Room;
     serve({ created });
     const { onCreated, user } = showPage("/rooms/closeds/new");
-    await user.click(await screen.findByRole("switch", { name: `Give ${grace.name} access to this room` }));
     await user.clear(await roomName());
     await user.type(await roomName(), "Leads");
     act(() => navigate("/account/edit"));
     await user.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() => expect(location.pathname).toBe("/account/edit"));
     expect(onCreated).toHaveBeenCalledExactlyOnceWith(created);
-    expect(posted()).toEqual({ kind: "closed", name: "Leads", icon: "", memberIds: [ada.id, grace.id] });
+    expect(posted()).toEqual({ kind: "closed", name: "Leads", icon: "", memberIds: [ada.id, grace.id, linus.id] });
   });
 
   it("shows the room the dialog's Save made when signing out then fails, as its own Save does", async () => {

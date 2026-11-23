@@ -140,10 +140,10 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
       document.removeEventListener("visibilitychange", refreshVisible);
     };
   }, [roomId, days, revision]);
-  if (!data && !error && !loading) return null;
-  // Unbound rooms must not gain and then lose a header while their 404 arrives.
-  if (!data && loading) return null;
   if (error) return <div role="alert" className="flex shrink-0 items-center justify-between border-b px-4 py-2 text-xs">{error}<button className="rounded border px-2 py-1 hover:bg-hover" onClick={() => setRevision(n => n + 1)}>重试</button></div>;
+  // Keep the room-header statistics slot visible while loading and on unbound rooms.
+  if (!data && compact) return <div role="status" className="ml-auto flex min-h-8 shrink-0 items-center rounded-md border bg-card px-2.5 text-xs text-message-muted">{loading ? "正在加载项目统计…" : "此频道尚未绑定 Project Pulse"}</div>;
+  // The full project overview must not gain and then lose a header while the 404 arrives.
   if (!data) return null;
   const progress = data.milestone_progress;
   const reported = progress?.basis === "reported";
