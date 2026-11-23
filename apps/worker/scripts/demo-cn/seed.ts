@@ -36,6 +36,9 @@ async function main() {
   if (!joinCode) throw new Error("没有可用的本地加入码");
   for (let i = 1; i < accounts.length; i++) sessions.push(await ember.join(joinCode, { ...accounts[i]!, password }, avatar(i)));
   for (let i = 0; i < sessions.length; i++) await ember.changeProfile(sessions[i]!, { bio: accounts[i]!.bio });
+  for (const session of sessions.slice(1)) {
+    await ember.json(`/api/account/users/${session.user.id}`, "PATCH", { role: "administrator" }, { session: admin });
+  }
   const roomIds: Record<string, RoomId> = {};
   const first = await ember.sidebar(admin);
   for (const [i, name] of ["公告与通知", "研发日常"].entries()) {

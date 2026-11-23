@@ -1,13 +1,13 @@
 export const people = [
-  ["guyuan", "顾远", "项目负责人｜整体协调、风险跟踪与验收边界。", ["admin", "wjw"]],
-  ["linyu", "林屿", "前端工程师｜直播监控、状态恢复与可视化。", ["ljg"]],
-  ["xuyan", "许言", "多媒体工程师｜智能剪辑、转码与字幕时间轴。", ["ch"]],
-  ["zhouning", "周宁", "前端工程师｜互动组件、浏览器兼容性与无障碍。", ["lhy"]],
-  ["chenxu", "陈序", "平台工程师｜AI 网关、可观测性与构建流水线。", ["skf"]],
-  ["shenqing", "沈青", "产品设计师｜组件规范、页面状态与交互评审。", ["zzh"]],
-  ["suhe", "苏禾", "产品经理｜需求澄清、验收用例与内容策略。", ["zd"]],
-  ["luoan", "罗安", "前端工程师｜设计组件库、性能优化与集成测试。", ["test1"]],
-  ["liangmu", "梁沐", "后端工程师｜状态同步、限流、数据契约与服务集成。", ["test2"]],
+  ["guyuan", "王佳炜", "管理员。", ["admin", "wjw"]],
+  ["linyu", "刘继光", "管理员。", ["ljg"]],
+  ["xuyan", "陈航", "管理员。", ["ch"]],
+  ["zhouning", "刘海颖", "管理员。", ["lhy"]],
+  ["chenxu", "史可凡", "管理员。", ["skf"]],
+  ["shenqing", "郑子豪", "管理员。", ["zzh"]],
+  ["suhe", "赵栋", "管理员。", ["zd"]],
+  ["luoan", "测试管理员", "管理员。", ["test1"]],
+  ["liangmu", "测试管理员", "管理员。", ["test2"]],
 ] as const;
 
 // Four distinct issues per project. Each row is a real conversation outline, not a shuffled message template.
