@@ -86,11 +86,13 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
     }
     const {emailAddress} = JSON.parse(Buffer.concat(chunks).toString());
     const {accounts, password} = JSON.parse(readFileSync(path.join(state, "accounts.json"), "utf8")) as {
-      accounts: {emailAddress: string; loginAlias?: string}[]; password: string;
+      accounts: {emailAddress: string; loginAlias?: string; loginAliases?: string[]}[]; password: string;
     };
     const login = typeof emailAddress === "string" ? emailAddress.trim().toLowerCase() : "";
     const account = login === "admin" ? accounts[0] : accounts.find(person =>
-      person.emailAddress.toLowerCase() === login || person.loginAlias === login);
+      person.emailAddress.toLowerCase() === login ||
+      person.loginAliases?.includes(login) ||
+      person.loginAlias === login);
     if (!account) {reply(401, "请使用已有的演示账号。"); return;}
     const body = JSON.stringify({emailAddress: account.emailAddress, password});
     const upstream = http.request({

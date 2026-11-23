@@ -20,7 +20,12 @@ async function main() {
   mkdirSync(state, { recursive: true });
   if (existsSync(credentialsFile)) throw new Error("已有初始化凭证但服务未初始化。为防止覆盖，已停止；请检查本地端口和持久化目录。");
   const password = randomBytes(15).toString("base64url");
-  const accounts = people.map(([key, name, bio]) => ({ name, emailAddress: `${key}@demo.example.com`, bio }));
+  const accounts = people.map(([key, name, bio, loginAliases]) => ({
+    name,
+    emailAddress: `${key}@demo.example.com`,
+    bio,
+    loginAliases: [...loginAliases],
+  }));
   // Written before the first mutation so credentials survive a partial seed. Never overwrite it.
   writeFileSync(credentialsFile, JSON.stringify({ origin, password, accounts, status: "initializing" }, null, 2), { mode: 0o600, flag: "wx" });
   const sessions: Session[] = [];

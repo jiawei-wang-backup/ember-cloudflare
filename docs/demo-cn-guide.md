@@ -37,17 +37,17 @@ Ember 的副标题最多 30 字，因此侧栏使用较短的副标题；完整�
 密码由脚本随机生成并打印。所有演示成员共用此次初始化的密码，凭证只保存在忽略提交的
 `.wrangler/demo-cn/accounts.json`，文件权限为 0600；本文和业务配置不保存密码。
 
-|姓名|账号|职责|
-|---|---|---|
-|顾远|guyuan@demo.example.com|管理员、项目负责人|
-|林屿|linyu@demo.example.com|前端、监控平台|
-|许言|xuyan@demo.example.com|多媒体、智能剪辑|
-|周宁|zhouning@demo.example.com|前端、互动组件|
-|陈序|chenxu@demo.example.com|平台、AI 网关|
-|沈青|shenqing@demo.example.com|产品设计、组件库|
-|苏禾|suhe@demo.example.com|产品、内容策略|
-|罗安|luoan@demo.example.com|前端、组件集成|
-|梁沐|liangmu@demo.example.com|后端、状态同步|
+|姓名|局域网登录名|完整演示账号|职责|
+|---|---|---|---|
+|顾远|admin / wjw|guyuan@demo.example.com|管理员、项目负责人|
+|林屿|ljg|linyu@demo.example.com|前端、监控平台|
+|许言|ch|xuyan@demo.example.com|多媒体、智能剪辑|
+|周宁|lhy|zhouning@demo.example.com|前端、互动组件|
+|陈序|skf|chenxu@demo.example.com|平台、AI 网关|
+|沈青|zzh|shenqing@demo.example.com|产品设计、组件库|
+|苏禾|zd|suhe@demo.example.com|产品、内容策略|
+|罗安|test1|luoan@demo.example.com|前端、组件集成|
+|梁沐|test2|liangmu@demo.example.com|后端、状态同步|
 
 每人有独立中文简介和本地绘制的不同 PNG 人物头像（不同发型、肤色、眼镜和服装）；两个 Bot 使用机器人头像。所有姓名、账号和事件均为模拟数据。
 同时演示中英文或多个成员时使用不同浏览器配置文件/无痕窗口。浏览器 cookie 不按端口隔离，
