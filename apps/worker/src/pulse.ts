@@ -18,7 +18,7 @@ function demoSnapshot(env: Env, projectId: string, days: number, source: URL): P
   } catch { return null; }
 }
 
-export function pulseBinding(env: Env, roomId: string): {projectId: string; memberIds: string[]} | null {
+export function pulseBinding(env: Env, roomId: string): {projectId: string; memberIds: string[]; allRoomMembers?: boolean} | null {
   try {
     const value = JSON.parse(env.PULSE_ROOMS || "{}")[roomId];
     const validId = env.PULSE_SOURCE === "dashboard" ? /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(value?.projectId) : /^[0-9a-f-]{36}$/i.test(value?.projectId);
@@ -74,8 +74,8 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   } : null);
   if (!binding) return Response.json({error:"频道未关联 Project Pulse"},{status:404,headers});
   const user = await workspace(env).authenticate(credentials);
-  if (!user || !binding.memberIds.includes(user.id)) return Response.json({error:"没有项目数据权限"},{status:403,headers});
-  if(new URL(request.url).searchParams.get("audience")==="room"&&!await workspace(env).canSharePulse(roomId as RoomId,user.id,binding.memberIds))return Response.json({error:"频道读者未全部获得项目授权"},{status:403,headers});
+  if (!user || !(explicit?.allRoomMembers === true ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return Response.json({error:"没有项目数据权限"},{status:403,headers});
+  if(new URL(request.url).searchParams.get("audience")==="room"&&!await workspace(env).canSharePulse(roomId as RoomId,user.id,binding.memberIds,explicit?.allRoomMembers === true))return Response.json({error:"频道读者未全部获得项目授权"},{status:403,headers});
   const days=Number(new URL(request.url).searchParams.get("days") || 7);
   if (![1,7,30].includes(days)) return Response.json({error:"时间窗仅支持 1、7、30 天"},{status:422,headers});
   try {
@@ -101,7 +101,7 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
   const rooms = sidebar.rooms.flatMap(room => {
     if (room.kind === "direct") return [];
     const binding = pulseBinding(env, room.id);
-    const projectId = binding ? (binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]?.repository);
+    const projectId = binding ? (binding.allRoomMembers === true || binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]?.repository);
     return projectId ? [{room, projectId}] : [];
   });
   const results = await Promise.all(rooms.map(async ({room, projectId}) => {
@@ -113,7 +113,7 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
 
 export function projectTools(env: Env, roomId: RoomId, askerId: UserId): (Omit<EmberTool, "run"> & {run(input: Record<string, unknown>): Promise<Unlogged>})[] {
   const binding = pulseBinding(env,roomId);
-  if (!binding || !binding.memberIds.includes(askerId)) return [];
+  if (!binding || (binding.allRoomMembers !== true && !binding.memberIds.includes(askerId))) return [];
   const sections = {
     get_project_overview: ["project","business","milestone_progress","observation"],
     get_project_members: ["members"], get_member_activity: ["activities"],
@@ -122,7 +122,7 @@ export function projectTools(env: Env, roomId: RoomId, askerId: UserId): (Omit<E
     get_recent_deliveries: ["pulls","milestones"],
   };
   return Object.entries(sections).map(([name,keys])=>({name,description:`查询当前频道明确关联的真实 Project Pulse 项目：${keys.join("、")}。缺失信息不可推测；返回来源和更新时间。`,takes:{type:"object",properties:{days:{type:"integer",enum:[1,7,30]}},additionalProperties:false},run:async input=>{
-    if (!await workspace(env).canSharePulse(roomId,askerId,binding.memberIds)) throw new Error("频道中存在未获项目授权的成员，不能公开回答项目数据");
+    if (!await workspace(env).canSharePulse(roomId,askerId,binding.memberIds,binding.allRoomMembers === true)) throw new Error("频道中存在未获项目授权的成员，不能公开回答项目数据");
     const days=input.days ?? 7;
     if (![1,7,30].includes(days as number)) throw new Error("无效时间窗");
     const data=await pulseSnapshot(env,binding.projectId,days as number);

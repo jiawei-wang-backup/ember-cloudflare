@@ -2,12 +2,13 @@ import type { PulseSnapshot } from "@ember/protocol";
 
 interface Report {
   project_key: string;
+  owner_name?: string;
   goal: string;
   observed_at: string;
   milestones: Array<{title: string; state: string; evidence: string}>;
 }
 export interface PulseDashboard {
-  projects: Array<{repository_id: string; full_name: string; repositories?: string[]; status: string; milestones: PulseSnapshot["milestones"]}>;
+  projects: Array<{owner_name?: string; repository_id: string; full_name: string; repositories?: string[]; status: string; milestones: PulseSnapshot["milestones"]}>;
   project_reports: Report[];
   workspace_states: Array<{workspace_name: string; status: string}>;
   project_usage: Array<{project_key: string; input_tokens: string | null; output_tokens: string | null}>;
@@ -47,9 +48,10 @@ export function dashboardProject(data: PulseDashboard, projectKey: string, days:
   const completed = milestones.filter(m => report ? m.state === "completed" : m.state === "accepted").length;
   const pulls = data.pulls.filter(p => matches(p.full_name)).map(p => ({number: p.number, title: p.title, url: p.url, state: p.state, updated_at: p.updated_at, is_draft: p.is_draft, repository_full_name: p.repository_full_name || new URL(p.url).pathname.split("/").slice(1, 3).join("/")}));
   const fetchedAt = now.toISOString();
+  const ownerName = project?.owner_name || report?.owner_name;
   const day = 86_400_000, offset = 8 * 3_600_000;
   return {
-    project: {key: projectKey.toLowerCase(), repository_id: project?.repository_id ?? null, full_name: project?.full_name || report!.project_key, repositories, goal: report?.goal, status: project?.status || data.workspace_states.find(s => matches(s.workspace_name))?.status || "unknown", owner: members.length ? {display_name: members.map(member => member.display_name).join("、")} : null, owner_basis: "participants"},
+    project: {key: projectKey.toLowerCase(), repository_id: project?.repository_id ?? null, full_name: project?.full_name || report!.project_key, repositories, goal: report?.goal, status: project?.status || data.workspace_states.find(s => matches(s.workspace_name))?.status || "unknown", owner: ownerName ? {display_name: ownerName} : null},
     window: {days, since: new Date((Math.floor((now.getTime() + offset) / day) - days + 1) * day - offset).toISOString(), until: fetchedAt, kind: "calendar-utc8"},
     fetched_at: fetchedAt, source,
     usage: {input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), cached_input_tokens: null, events: null, updated_at: null},

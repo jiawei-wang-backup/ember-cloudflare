@@ -132,6 +132,7 @@ export interface Env {
    * `http://127.0.0.1:8793/accounts/<id>/ai/v1/...` (assistant/gateway.ts).
    */
   AI_GATEWAY_URL?: string;
+  JUXON_API_KEY?: string;
   /**
    * Where Ember reads the models file, which lists the models it offers besides Workers AI's
    * (docs/models.md): unset, the one on Ember's main branch, or else an https address, or the browser

@@ -161,6 +161,7 @@ async function sendMessage(env: Env, access: OutsideAccess, { room_id: roomId, t
   if (mentionId !== undefined && (typeof mentionId !== "string" || !/^[a-z0-9]{16}$/.test(mentionId) || threadId !== undefined))
     throw new Refused("Give a valid mention_id without thread_id.");
   const room = await roomOf(env, access, roomId);
+  if (mentionId && env.PULSE_TEAM_PROJECT_CHANNELS === "true" && !(await workspace(env).canAnswerCodexMention(access.userId, room.id))) throw new Refused(NO_ROOM);
   if (leaseId !== undefined && (typeof mentionId !== "string" || typeof leaseId !== "string" ||
       !(await workspace(env).changeCodexMentionLease(access, room.id, mentionId, leaseId, "renew"))))
     throw new Refused("This Codex job is no longer claimed by the connection.");
@@ -202,6 +203,7 @@ const CODEX_THINKING: Tool = {
     const room = await roomOf(env, access, roomId);
     if (room.kind === "direct") throw new Refused(NO_ROOM);
     const work = workspace(env);
+    if (env.PULSE_TEAM_PROJECT_CHANNELS === "true" && !(await work.canAnswerCodexMention(access.userId, room.id))) return {shown:false};
     if (queued && !(await work.codexMentionStillQueued(access.userId, room.id, mentionId))) return {shown: false};
     const sender = await work.outsideSender(access, room.id, true);
     if (!sender || sender === "limited") throw new Refused(NO_ROOM);
@@ -224,11 +226,15 @@ const BIND_PULSE_DEVICE: Tool = {
     const person = await workspace(env).pulseReporter(access.userId);
     if (!person) throw new Refused("Ember 成员账号不可用。");
     const response = await fetch(new URL("/api/v1/ember-device-binding", base), {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(5000),
+      method: "POST", redirect: "manual", signal: AbortSignal.timeout(5000),
       headers: {"Content-Type": "application/json", Authorization: `Bearer ${env.PULSE_DEVICE_BIND_TOKEN}`},
       body: JSON.stringify({credential_digest, member_id: person.id, display_name: person.name}),
     });
-    if (response.status === 404) return {status: "waiting_for_report"};
+    if (response.status === 404) {
+      const reply = await response.json().catch(() => null) as {error?:string} | null;
+      if (reply?.error === "device_not_reported") return {status: "waiting_for_report"};
+      throw new Refused("上报服务缺少设备绑定接口。");
+    }
     if (response.status === 409) throw new Refused("此设备已绑定其他成员。");
     if (!response.ok) throw new Refused("暂时无法绑定上报设备。");
     return {status: "bound", name: person.name};

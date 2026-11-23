@@ -1,3 +1,4 @@
+import { juxonFlash } from "./juxon";
 import {
   isProviderFormat,
   PAGES_READ_PER_ANSWER,
@@ -766,6 +767,30 @@ const isWrongFormat = (answered: Answered | GatewayRefusal | Asking): answered i
 
 /** What AI Gateway answers `request`, which asks `question` of the model `gateway` names, or why it refused, by `signal`. */
 async function send(env: Env, gateway: Gateway, question: Question, request: Record<string, unknown>, signal: AbortSignal): Promise<{ body: unknown } | GatewayRefusal> {
+  if (gateway.model === juxonFlash.id) {
+    if (!env.JUXON_API_KEY || gateway.format !== "chat" || (question.askerId && !question.agentId)) {
+      return { status: 403, reason: "model", refusal: "Juxon Flash is configured for agents only." };
+    }
+    try {
+      const response = await fetch("https://llm.juxonmedia.com/v1/chat/completions", {
+        method: "POST",
+        redirect: "manual",
+        headers: { Authorization: `Bearer ${env.JUXON_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "deepseek-v4.1-flash",
+          messages: request.messages,
+          max_tokens: question.maxTokens,
+          thinking: { type: "disabled" },
+        }),
+        signal,
+      });
+      if (!response.ok) return { status: 502, reason: "unanswered", refusal: `Juxon HTTP ${response.status}` };
+      return { body: await response.json() };
+    } catch (error) {
+      console.error("Juxon request failed", error instanceof Error ? error.name : "network error");
+      return { status: 502, reason: "unanswered", refusal: "Juxon did not answer." };
+    }
+  }
   const provider = isProviderFormat(gateway.format) ? gateway.format : null;
   let response: Response;
   try {

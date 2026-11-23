@@ -216,7 +216,7 @@ async function codexMentions(request: Request, env: Env): Promise<Response> {
     const allChannels = params.get("all_channels") === "1";
     const last = request.headers.get("Last-Event-ID") || "0";
     const after = Number(last);
-    if (allChannels === (rooms.length > 0) || rooms.length > 100 || rooms.some(room => !isRoomId(room)) ||
+    if (allChannels || !rooms.length || rooms.length > 100 || rooms.some(room => !isRoomId(room)) ||
         !/^\d+$/.test(last) || !Number.isSafeInteger(after))
       return Response.json({error: "Invalid rooms or cursor."}, {status: 400, headers: PRIVATE});
     return work.codexMentionStream(access, rooms, after);

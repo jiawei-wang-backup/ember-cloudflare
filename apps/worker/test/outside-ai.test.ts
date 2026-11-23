@@ -1228,13 +1228,19 @@ it.each(["project", "open", "closed"] as const)("pushes %s channel mentions and 
           status?: string; leaseId?: string; accepted?: boolean; question?: {reply_to?: string};
         }>;
     try {
+      if (kind !== "project") {
+        expect((await apiWith(bindings, eventPath + "?all_channels=1", {headers: headers(token)})).status).toBe(400);
+        const question = await post(socket, `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment>测试</p>`);
+        expect(await job(token, question.id, "claim")).toMatchObject({status:"gone"});
+        return;
+      }
       if (kind === "project") {
         expect((await apiWith(bindings, eventPath, {headers: headers(token)})).status).toBe(400);
         expect((await apiWith(bindings, `${eventPath}?all_channels=1&room=${room.id}`, {headers: headers(token)})).status).toBe(400);
       }
       const reader = await stream();
       const markup = `<p><action-text-attachment sgid="${member.user.id}" content-type="application/vnd.campfire.mention"></action-text-attachment>解释项目</p>`;
-      const root = kind === "project" ? undefined : await post(socket, "<p>当前讨论的背景</p>");
+      const root = await post(socket, "<p>当前讨论的背景</p>");
       const question = root ? await reply(socket, root, markup) : await post(socket, markup);
       const live = await event(reader);
       expect(live).toContain(question.id);

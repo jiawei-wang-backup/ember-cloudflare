@@ -26,7 +26,7 @@ export async function pulseCollaboration(request: Request, env: Env, id: string,
   if (!user) return problem(401, "未登录");
   if (!settings || settings === "not found") return problem(404, "频道不可访问");
   const binding = pulseBinding(env, roomId);
-  if (!binding || !binding.memberIds.includes(user.id)) return problem(403, "没有项目数据权限");
+  if (!binding || !(binding.allRoomMembers === true ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return problem(403, "没有项目数据权限");
   if (action === "messages") {
     const params = new URL(request.url).searchParams;
     const kind = params.get("kind") || "all", author = params.get("author") || undefined;
@@ -40,7 +40,7 @@ export async function pulseCollaboration(request: Request, env: Env, id: string,
     try { return Response.json(await env.CHAT_ROOM.getByName(roomId).projectMessages(roomId, {authors, since, until, before, adopted: params.get("adopted") === "1"}), {headers}); }
     catch { return problem(422, "无法读取该历史位置，请重新筛选"); }
   }
-  if (!settings.canAdminister || !await workspace(env).canSharePulse(roomId, user.id, binding.memberIds)) return problem(403, "仅本项目的管理员可采纳，且频道成员须全部获得项目授权");
+  if (!settings.canAdminister || !await workspace(env).canSharePulse(roomId, user.id, binding.memberIds, binding.allRoomMembers === true)) return problem(403, "仅本项目的管理员可采纳，且频道成员须全部获得项目授权");
   let input: ReturnType<typeof parsePulseAdoption>;
   try { input = parsePulseAdoption(await request.json()); } catch { return problem(422, "请求格式不正确"); }
   if (!input) return problem(422, "请选择 1 至 20 条消息，并填写有效的采纳说明");
@@ -75,7 +75,7 @@ export async function pulseCollaboration(request: Request, env: Env, id: string,
     // Recheck authorisation after a potentially slow model call.
     const authorizedAt = Date.now();
     const current = await workspace(env).roomSettings(credentials, roomId);
-    if (!current || current === "not found" || !current.canAdminister || !await workspace(env).canSharePulse(roomId, user.id, binding.memberIds)) return problem(403, "权限已变化，未发布方案");
+    if (!current || current === "not found" || !current.canAdminister || !await workspace(env).canSharePulse(roomId, user.id, binding.memberIds, binding.allRoomMembers === true)) return problem(403, "权限已变化，未发布方案");
     const latest = await env.CHAT_ROOM.getByName(roomId).messagesWithIds(roomId, input.messageIds);
     if (latest.length !== messages.length || latest.some(m => m.deleted || m.updatedAt !== messages.find(original => original.id === m.id)?.updatedAt)) return problem(409, "原始讨论已经变化，请重新选择并生成方案");
     const message = await env.CHAT_ROOM.getByName(roomId).createProjectAdoption(roomId, user, authorizedAt, input.clientMessageId, markup);

@@ -16,7 +16,7 @@ export async function projectFeedbackRoute(request: Request, env: Env, roomId: s
   if (!user) return problem(401, "未登录");
   if (!settings || settings === "not found") return problem(404, "项目不可访问");
   const binding = pulseBinding(env, roomId);
-  if (!binding || !binding.memberIds.includes(user.id)) return problem(403, "没有项目权限");
+  if (!binding || !(binding.allRoomMembers === true ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return problem(403, "没有项目权限");
   const definition = businessDefinition(binding.projectId);
   if (!definition) return problem(404, "此项目未开启业务协作");
   const room = env.CHAT_ROOM.getByName(roomId);
@@ -32,7 +32,7 @@ export async function projectFeedbackRoute(request: Request, env: Env, roomId: s
     if (before && !/^[a-zA-Z0-9_-]{1,80}$/.test(before)) return problem(422, "分页位置无效");
     return Response.json({...await room.projectFeedback(roomId, before), canManage: settings.canAdminister}, {headers});
   }
-  if (!await workspace(env).canSharePulse(roomId, user.id, binding.memberIds)) return problem(403, "项目读者授权已变化，暂不能公开反馈内容");
+  if (!await workspace(env).canSharePulse(roomId, user.id, binding.memberIds, binding.allRoomMembers === true)) return problem(403, "项目读者授权已变化，暂不能公开反馈内容");
   let body: unknown;
   try {body = await request.json();} catch {return problem(422, "请求格式无效");}
   const validModule = (moduleId: string, milestoneId?: string | null) => {

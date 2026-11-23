@@ -1,3 +1,4 @@
+import { juxonFlash } from "./juxon";
 import { EMBER_REPOSITORY } from "@ember/protocol";
 import {
   ASSISTANT_MODELS,
@@ -172,6 +173,7 @@ const runsStill = ({ until }: OfferedModel) => until === undefined || until > ne
  * offered from the day it stops running (`runsStill`).
  */
 export async function offeredModelsOf(env: Env, keys: { accountId: string; apiToken: string | null }, fresh: boolean, noToken: string): Promise<OfferedModels> {
+  if (env.JUXON_API_KEY && keys.apiToken === "juxon-local-worker-binding") return stillOffered([juxonFlash], juxonFlash.id, null);
   const { accountId, apiToken } = keys;
   const [file, workersAi] = await Promise.all([
     modelsFileOf(env, true),
@@ -201,6 +203,7 @@ export function stillOffered(listed: readonly OfferedModel[], suggested: string,
  * which is asked now when it hasn't been, but for one that has stopped running (`runsStill`).
  */
 export async function offeredModel(env: Env, model: string, keys: ModelSearchKeys): Promise<OfferedModel | null> {
+  if (model === juxonFlash.id) return env.JUXON_API_KEY ? juxonFlash : null;
   const listed = isWorkersAiModel(model) ? await keptWorkersAiModelsOf(env, keys) : (await modelsFileOf(env)).models;
   const offered = "refusal" in listed ? undefined : offeredModelOf(model, listed);
   return offered && runsStill(offered) ? offered : null;
@@ -213,6 +216,7 @@ export async function offeredModel(env: Env, model: string, keys: ModelSearchKey
  * none, and would be asked every question twice, the second time without them.
  */
 export async function takesEmbersTools(env: Env, model: string): Promise<boolean> {
+  if (model === juxonFlash.id) return false;
   return !isWorkersAiModel(model) && offeredModelOf(model, (await modelsFileOf(env)).models) !== undefined;
 }
 

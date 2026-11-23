@@ -3,7 +3,7 @@ import {dashboardProject, type PulseDashboard} from "../src/pulse-dashboard";
 
 function dashboard(): PulseDashboard {
   return {
-    projects: [{repository_id: "identity-repo", full_name: "JUXON-AI/jxaccount", repositories: ["JUXON-AI/jxaccount", "JUXON-AI/jxmcphub"], status: "unknown", milestones: []}],
+    projects: [{repository_id: "identity-repo", owner_name: "首次上报人", full_name: "JUXON-AI/jxaccount", repositories: ["JUXON-AI/jxaccount", "JUXON-AI/jxmcphub"], status: "unknown", milestones: []}],
     project_reports: [{project_key: "juxon-ai/jxaccount", goal: "多公司身份", observed_at: "2026-11-16T00:00:00Z", milestones: [{title: "组织同步", state: "completed", evidence: "目录记录"}, {title: "真实员工验收", state: "pending", evidence: "未验证"}]}, {project_key: "juxon-ai/deltaforce-game-library", goal: "游戏资料库", observed_at: "2026-11-16T00:00:00Z", milestones: []}],
     workspace_states: [{workspace_name: "juxon-ai/deltaforce-game-library", status: "blocked"}],
     project_usage: [{project_key: "JUXON-AI/jxaccount", input_tokens: "9007199254740993", output_tokens: "10"}, {project_key: "JUXON-AI/jxmcphub", input_tokens: "7", output_tokens: "2"}, {project_key: "other/jxaccount", input_tokens: "999999", output_tokens: "999"}],
@@ -16,8 +16,8 @@ it("scopes aggregates to explicit business repositories without leaking global o
   const data = dashboardProject(dashboard(), "juxon-ai/jxaccount", 7, "LAN", new Date("2026-11-16T09:00:00Z"));
   expect(data.usage).toMatchObject({input_tokens: "9007199254741000", output_tokens: "12", cached_input_tokens: null, events: null, updated_at: null});
   expect(data.members.map(m => m.display_name)).toEqual(["真实参与者"]);
-  expect(data.project.owner).toEqual({display_name:"真实参与者"});
-  expect(data.project.owner_basis).toBe("participants");
+  expect(data.project.owner).toEqual({display_name:"首次上报人"});
+  expect(data.project.owner_basis).toBeUndefined();
   expect(data.activities).toEqual([]);
   expect(data.models).toEqual([]);
   expect(data.pulls).toHaveLength(1);
@@ -26,14 +26,16 @@ it("scopes aggregates to explicit business repositories without leaking global o
   expect(data.window.since).toBe("2026-11-09T16:00:00.000Z");
   expect(JSON.stringify(data)).not.toContain("其他项目秘密");
 });
-it("lists every participant once as an owner across linked repositories", () => {
+it("keeps the first reporter as owner when participants change", () => {
   const source=dashboard();
   source.memberships.push({...source.memberships[0]!,full_name:"JUXON-AI/jxaccount",session_count:1});
   source.memberships.push({...source.memberships[0]!,display_name:"第二位参与者"});
   const data=dashboardProject(source,"juxon-ai/jxaccount",7,"LAN");
-  expect(data.project.owner?.display_name).toBe("真实参与者、第二位参与者");
+  expect(data.project.owner?.display_name).toBe("首次上报人");
   expect(data.members[0]?.sessions).toBe(3);
   source.memberships=[];
+  expect(dashboardProject(source,"juxon-ai/jxaccount",7,"LAN").project.owner?.display_name).toBe("首次上报人");
+  delete source.projects[0]!.owner_name;
   expect(dashboardProject(source,"juxon-ai/jxaccount",7,"LAN").project.owner).toBeNull();
 });
 it("supports workspace-only projects without inventing repository UUIDs or zero usage", () => {

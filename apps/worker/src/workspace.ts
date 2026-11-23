@@ -1666,14 +1666,17 @@ export class Workspace extends DurableObject<Env> {
     return (await this.outside.connectionsOf(person.user.id, new Date().toISOString())).map(shownConnection);
   }
 
-  private async canAnswerCodexMention(userId: UserId, roomId: RoomId): Promise<boolean> {
+  async canAnswerCodexMention(userId: UserId, roomId: RoomId): Promise<boolean> {
+    if (!pulseBinding(this.env, roomId) && !(await this.teamProjectBindings([roomId]))[roomId]) return false;
     return (await this.store.codexChannelMembers(roomId, [userId])).length > 0;
   }
 
   async codexMentionStream(access: OutsideAccess, rooms: RoomId[], after: number): Promise<Response> {
     const requested = new Set(rooms);
     const channels = await this.store.codexChannelsFor(access.userId);
-    const subscribed = requested.size === 0 ? channels : channels.filter(id => requested.has(id));
+    const selected = channels.filter(id => requested.has(id));
+    const bound = await this.teamProjectBindings(selected);
+    const subscribed = selected.filter(id => bound[id] || pulseBinding(this.env,id));
     return this.codexMentions.stream(access.userId, new Set(subscribed), after);
   }
 
@@ -4784,9 +4787,9 @@ export class Workspace extends DurableObject<Env> {
   }
 
   /** Project answers go into the room: require every potential active reader to be authorized. */
-  async canSharePulse(roomId: RoomId, userId: UserId, granted: string[]): Promise<boolean> {
+  async canSharePulse(roomId: RoomId, userId: UserId, granted: string[], allRoomMembers = false): Promise<boolean> {
     const settings = await this.store.roomSettings(roomId,userId);
-    // Future workspace joiners must not inherit project answers via public chat history.
+    if (allRoomMembers) return Boolean(settings?.people.some(person => person.member && person.id === userId));
     if (!settings || settings.room.kind !== "closed" || !granted.includes(userId)) return false;
     const readers=settings.people.filter(person=>person.member);
     return readers.some(person=>person.id === userId) && readers.every(person=>granted.includes(person.id));

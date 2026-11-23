@@ -8,6 +8,7 @@ import { networkInterfaces } from "node:os";
 import { mkdirSync,existsSync,readFileSync,writeFileSync,createReadStream } from "node:fs";
 import {realpath, stat} from "node:fs/promises";
 import { projectSnapshots } from "./project-snapshots.ts";
+import {deliveryContexts, syncGithubDeliveries} from "./github-deliveries.ts";
 import { handleProjectBot } from "./pulse-bot.ts";
 import {handleProjectAssistantChat} from "./project-assistant-chat.ts";
 import { handleDemoBot } from "./demo-bot.ts";
@@ -116,6 +117,12 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
 const handleRequest: http.RequestListener = (req, res) => {
   // Local tooling and webhook secrets are never exposed through the LAN entry.
   if (!loopback(req.socket.remoteAddress) && localPath(req)) {res.writeHead(404).end(); return;}
+  if (req.url?.startsWith("/__github_context/")) {
+    const context = deliveryContexts.get(req.url.slice("/__github_context/".length));
+    if (!tlsProxyKey || req.headers.authorization !== "Bearer " + tlsProxyKey || !context) {res.writeHead(404).end(); return;}
+    res.writeHead(200, {"content-type":"application/json","cache-control":"no-store"}).end(JSON.stringify(context));
+    return;
+  }
   if (handleDemoBot(req, res)) return;
   if (handleProjectBot(req,res)) return;
   if (handleProjectAssistantChat(req, res)) return;
@@ -200,6 +207,13 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   }
   startPRPoll(path.join(state, "pr-pilot-state.json"), false);
   startPRPoll(companyPilotLedger, true);
+  if (lan) {
+    const pollGithub = async () => {
+      try { await syncGithubDeliveries(); } catch { console.error("GitHub 产出同步暂不可用"); }
+      if (server.listening) setTimeout(pollGithub, prPollIntervalMs).unref();
+    };
+    setTimeout(pollGithub, 15000).unref();
+  }
   console.log(`中文演示：${origin}（独立存储 ${state}/state）`);
   if (lan) for (const [name, addresses] of Object.entries(networkInterfaces())) if (/^(en|eth|wlan)/.test(name)) for (const address of addresses || []) if (address.family === "IPv4" && !address.internal) console.log(`局域网入口：http://${address.address}:5174`);
 });

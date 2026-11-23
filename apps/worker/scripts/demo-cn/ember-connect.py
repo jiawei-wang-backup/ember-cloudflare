@@ -137,8 +137,10 @@ def mcp(message, protocol=None, *, refresh=True):
     return authorized(lambda token: request("/mcp", message, token=token, protocol=protocol), refresh=refresh)
 
 
-def mention_events(rooms, after):
-    query = {"all_channels": "1"} if rooms is None else [("room", room) for room in rooms]
+def mention_events(rooms, after, still_bound):
+    if not rooms:
+        raise ValueError("需要已绑定的项目频道")
+    query = [("room", room) for room in rooms]
     path = "/api/codex/mentions?" + urlencode(query)
 
     def open_stream(token):
@@ -150,6 +152,8 @@ def mention_events(rooms, after):
             raise ValueError("Ember 代答推送格式错误")
         fields = {}
         for raw in stream:
+            if raw.startswith(b":") and not still_bound():
+                return
             line = raw.decode("utf-8").rstrip("\r\n")
             if not line:
                 if fields.get("event") == "mention":
