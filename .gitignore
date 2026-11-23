@@ -11,3 +11,4 @@ skills-lock.json
 
 # What `pnpm run deploy` deploys a Worker on DO SQLite from, beside its wrangler config, while it deploys.
 *.deploy.json
+__pycache__/
