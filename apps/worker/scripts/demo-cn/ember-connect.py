@@ -17,7 +17,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
-ORIGIN = "https://192.168.20.58:5443"
+ORIGIN = "https://192.168.16.70:5443"
 RESOURCE = ORIGIN + "/mcp"
 PACKAGE = Path(__file__).resolve().parent
 STATE = Path.home() / ".ember-cn"

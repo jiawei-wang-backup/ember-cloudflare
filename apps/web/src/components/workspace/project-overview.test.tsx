@@ -94,7 +94,7 @@ it("keeps the compact statistics button for a bound project without business det
     usage: {input_tokens: "5", output_tokens: "2"},
     members: [], models: [], activities: [], milestones: [], pulls: [],
     window: {days: 7}, cost: {label: "费用未知"}, quota: {reason: "未知"}, caveats: [],
-    source: "http://192.168.20.58:4185/api/v1/dashboard?days=7",
+    source: "http://192.168.16.70:4185/api/v1/dashboard?days=7",
   })));
   render(<ProjectOverview roomId="monashmate" compact/>);
   expect(await screen.findByRole("link", {name: /监控面板/})).toBeVisible();
