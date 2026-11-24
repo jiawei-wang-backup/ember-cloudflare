@@ -65,6 +65,12 @@ export function ProjectQuickLook({data, onDiscussion}: {data: PulseSnapshot; onD
           </dd>
         </div>
       </dl>
+      {data.ember_snapshot && data.activities.length > 0 && <div className="mt-4 border-t pt-3 text-sm">
+        <h3 className="font-medium">最近进展</h3>
+        <ul className="mt-1 list-inside list-disc space-y-1 text-message-muted">
+          {data.activities.map((activity, index) => <li key={index}>{activity.title || activity.summary}</li>)}
+        </ul>
+      </div>}
     </section>
   );
 }

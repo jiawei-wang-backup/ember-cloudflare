@@ -45,8 +45,8 @@ export class DashboardCache {
   }
 }
 
-export async function fetchDashboard(url: URL, token?: string): Promise<PulseDashboard> {
-  const response = await fetch(url, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "manual", signal: AbortSignal.timeout(8000)});
+export async function fetchDashboard(url: URL, token?: string, timeout = 8000): Promise<PulseDashboard> {
+  const response = await fetch(url, {headers: token ? {Authorization: `Bearer ${token}`} : {}, redirect: "manual", signal: AbortSignal.timeout(timeout)});
   if (!response.ok) throw new Error(`Project Pulse 返回 ${response.status}`);
   return await response.json() as PulseDashboard;
 }

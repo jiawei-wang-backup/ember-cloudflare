@@ -1,0 +1,1 @@
+只做连通性检查。核对 ZIP 的 SHA-256 和包内 SHA256SUMS。运行 python pulse-onboard.py links 与 preflight，检查 Ember 登录页和 Pulse 是否可访问。用 ember-connect.py connect 只读授权，再用 rooms后，从 Ember 列出现有可访问频道。不创建频道、不提交项目快照或原始数据、不开启定时任务。分别报告两端结果和错误。

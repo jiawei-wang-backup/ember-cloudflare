@@ -110,10 +110,24 @@ def uploaded_context(project):
     key = project.get("repository")
     if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", key):
         raise ValueError("代答项目缺少已核实仓库")
+    try:
+        snapshot = CONNECTOR.call_tool("read_project_snapshot", {"room_id": project["ember_room_id"]})["snapshot"]
+    except (OSError, ValueError, KeyError, StopIteration):
+        snapshot = None
+    native = snapshot["facts"] if snapshot and snapshot["repository"].lower() == key.lower() else None
+    if native is not None and not (project.get("ember_history") or project.get("ember_github_analysis")):
+        return native, []
     sources = sorted({str(UUID(source)) for source in project["source_ids"]})
-    _, rows = ONBOARD.reported_project_sessions(key, sources)
+    try:
+        _, rows = ONBOARD.reported_project_sessions(key, sources)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        if native is not None:
+            return native, []
+        raise
     rows.sort(key=lambda row: row.get("observed_at") or "", reverse=True)
     allowed = sorted({str(UUID(row["source_id"])) for row in rows})
+    if native is not None:
+        return native, allowed
     summaries = [ONBOARD.plain(row["summary"]) for row in rows
                  if isinstance(row.get("summary"), str) and row["summary"].strip()][:8]
     reports = [row["project_report"] for row in rows if isinstance(row.get("project_report"), dict)]

@@ -24,6 +24,7 @@ export function factsReply(data: PulseSnapshot, roomId: string, question: string
   const progress = data.milestone_progress;
   const progressText = progress ? `${progress.completed ?? progress.accepted}/${progress.total} 项有完成记录。` : "暂无阶段进度记录。";
   if (/谁|参与成员|负责人/.test(question)) {
+    if (data.team?.owner && /负责人/.test(question)) return html`<p>项目负责人是 ${data.team.owner.name}。</p>${source}`.body;
     const names = data.members.map(member => member.display_name.replace(/\s*[·•]\s*[a-f\d]{8,}$/i, ""));
     return html`<p>${names.length ? "上报记录里的参与成员有 " + names.join("、") + "。" : "暂无参与成员记录。"}</p>${source}`.body;
   }
@@ -56,8 +57,10 @@ export function factsReply(data: PulseSnapshot, roomId: string, question: string
   const doneText = done.slice(-2).map(stage => label(stage.title)).join("、");
   const blocked = data.project.status === "blocked" ? "项目目前受阻。" : "";
   const gapText = pending.slice(0, 3).map(stage => label(stage.title)).join("、") || "暂无待完成记录";
+  const recent = data.ember_snapshot ? data.activities.slice(0, 2).map(activity => activity.title || activity.summary).filter(Boolean).join("；") : "";
   return html`${/验收/.test(question) ? html`<p><strong>上报进度</strong> ${progressText}</p>` : ""}
     ${!asksGaps || asksStatus ? html`<p><strong>做到哪了</strong> ${progressText}${doneText ? " 已完成：" + doneText + "。" : ""}</p>` : ""}
+    ${recent ? html`<p><strong>最近进展</strong> ${recent}</p>` : ""}
     <p><strong>还差哪几步</strong> ${blocked}${gapText}。</p>
     ${asksGaps && feedback?.ember_message_id ? html`<p>${feedback.evidence ?? ""} <a href="${href}/@${feedback.ember_message_id}">查看原讨论</a></p>` : ""}
     ${/验收/.test(question) ? html`<p>项目进度由客户端 Codex 自动上报。</p>` : ""}

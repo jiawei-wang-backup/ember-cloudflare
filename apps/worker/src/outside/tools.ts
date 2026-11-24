@@ -6,6 +6,8 @@ import type { Env } from "../env";
 import { searchIndex } from "../search-index";
 import { matchesOf } from "../searches";
 import { workspace, type OutsideAccess } from "../workspace";
+import { parseProjectUpdate } from "../project-snapshot";
+import { pulseBinding } from "../pulse";
 
 // What an AI app connected to Ember can ask of it, as the person who connected it: the rooms they're
 // in, a room's messages, a thread's, and a search of them all, and, where they let it, sending a
@@ -259,6 +261,54 @@ const FIND_PROJECT_CHANNEL: Tool = {
     },
 };
 
+const READ_PROJECT_SNAPSHOT: Tool = {
+  name: "read_project_snapshot",
+  title: "Read an Ember project snapshot",
+  description: "Reads the project facts stored in this private project channel.",
+  takes: {room_id: ROOM_ID},
+  required: ["room_id"],
+  async run(env, access, {room_id}) {
+    const room = await roomOf(env, access, room_id);
+    if (room.kind !== "closed") throw new Refused(NO_ROOM);
+    const binding = pulseBinding(env, room.id);
+    const stored = await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, binding?.projectId ?? null);
+    if (!stored) return {snapshot: null};
+    const work = workspace(env);
+    const match = await work.findOutsideProjectChannel(access, stored.repository);
+    if (typeof match === "string" || match.id !== room.id ||
+        !await work.canSharePulse(room.id, access.userId, binding?.memberIds ?? [], !binding || binding.allRoomMembers === true))
+      throw new Refused(NO_ROOM);
+    return {snapshot: {repository: stored.repository, updatedAt: stored.updatedAt, facts: stored.facts}};
+  },
+};
+
+const SYNC_PROJECT_SNAPSHOT: Tool = {
+  name: "sync_project_snapshot",
+  title: "Sync an Ember project snapshot",
+  description: "Stores validated project facts and publishes progress once in the given private project channel.",
+  takes: {room_id: ROOM_ID, repository: {type: "string", description: "Confirmed GitHub repository, owner/name."}, update_json: {type: "string", description: "JSON with revision, observedAt and facts."}},
+  required: ["room_id", "repository", "update_json"],
+  async run(env, access, {room_id, repository, update_json}) {
+    const key = projectRepository(repository);
+    if (typeof update_json !== "string" || update_json.length > 50_000) throw new Refused("Invalid project snapshot.");
+    let value: unknown;
+    try { value = JSON.parse(update_json); } catch { throw new Refused("Invalid project snapshot JSON."); }
+    const update = parseProjectUpdate(value, key);
+    if (!update) throw new Refused("Invalid project snapshot.");
+    const work = workspace(env);
+    const room = await work.findOutsideProjectChannel(access, key);
+    if (typeof room === "string" || room.kind !== "closed" || room.id !== room_id) throw new Refused(NO_ROOM);
+    const binding = pulseBinding(env, room.id);
+    if (!await work.canSharePulse(room.id, access.userId, binding?.memberIds ?? [], !binding || binding.allRoomMembers === true))
+      throw new Refused("Project facts need permission for the channel's readers.");
+    const sender = await work.outsideSender(access, room.id);
+    if (sender === "limited") throw new Refused(SENDING_TOO_FAST);
+    const receipt = sender && await env.CHAT_ROOM.getByName(room.id).syncProjectSnapshot(room.id, key, update, sender);
+    if (!receipt) throw new Refused(NO_ROOM);
+    return receipt;
+  },
+};
+
 /** The tools a connection allowed to read has. */
 const READING: Tool[] = [
   {
@@ -365,9 +415,12 @@ async function answered(found: Promise<unknown>) {
 /** Gives `server` the tools `access` allows its app, each doing what it does as the connection's person. */
 export function registerTools(server: McpServer, env: Env, access: OutsideAccess): void {
   for (const { tools, annotations } of access.scopes.flatMap((scope) => TOOLS[scope] ?? [])) {
-    const available = tools === SENDING && env.PULSE_TEAM_PROJECT_CHANNELS === "true"
-      ? [...tools, CODEX_THINKING, ...(env.PULSE_DEVICE_BIND_TOKEN && access.scopes.includes("create_project_channels") ? [BIND_PULSE_DEVICE] : [])]
-      : tools === READING && access.scopes.includes("private") ? [...tools, FIND_PROJECT_CHANNEL] : tools;
+    const projectAccess = access.scopes.includes("private") && access.scopes.includes("create_project_channels");
+    const available = tools === SENDING
+      ? [...tools, ...(projectAccess ? [SYNC_PROJECT_SNAPSHOT] : []),
+        ...(env.PULSE_TEAM_PROJECT_CHANNELS === "true" ? [CODEX_THINKING, ...(env.PULSE_DEVICE_BIND_TOKEN && access.scopes.includes("create_project_channels") ? [BIND_PULSE_DEVICE] : [])] : [])]
+      : tools === READING && access.scopes.includes("private")
+        ? [...tools, FIND_PROJECT_CHANNEL, ...(projectAccess ? [READ_PROJECT_SNAPSHOT] : [])] : tools;
     for (const { name, title, description, takes, required, run } of available) {
       const inputSchema = fromJsonSchema({ type: "object" as const, properties: takes, required, additionalProperties: false });
       server.registerTool(name, { title, description, inputSchema, annotations }, (given) => answered(run(env, access, given as Record<string, unknown>)));

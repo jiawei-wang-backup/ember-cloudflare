@@ -1,0 +1,23 @@
+每 30 分钟同步已确认的 Ember 项目。使用当前永久接入目录的 r24 脚本和私有 .pulse-project-selection.json。只处理已确认仓库和授权会话。新增项目先经用户确认，自动运行期间不扩大范围。
+
+先执行 python pulse-onboard.py sync-ember，续传已有 Ember 队列。依据本机已确认项目的会话、Git 提交、获授权的 GitHub 及交付记录整理变化。只提交频道成员可以查看的脱敏项目资料，严禁写入原始会话、完整日志、凭据或本机路径。Pulse 不可用时继续更新 Ember。
+
+执行 python pulse-onboard.py prepare-ember。在返回的 work_dir 新建 UTF-8 ember-projects.json。文件为数组，每个项目用一个对象，例如：
+[
+  {
+    "repository": "owner/repo",
+    "goal": "已确认的项目目标",
+    "status": "on_track",
+    "progress": ["本轮已经验证的进展"],
+    "milestones": [{"title":"验收测试","state":"pending","evidence":"已确认依据","due_on":"2026-12-01"}],
+    "pulls": [{"number":"42","title":"已核实的变更","url":"https://github.com/owner/repo/pull/42","state":"merged","updated_at":"2026-11-24T07:30:00.000Z"}]
+  }
+]
+
+repository 必填且必须是已选仓库；其余字段可省略，服务端会保留未提供的字段。goal、progress 每条最多 600 字，progress 最多 8 条，milestones 最多 24 条，pulls 最多 30 条。状态使用 on_track、blocked、completed、paused 或 unknown；里程碑用 pending 或 completed，完成记录和业务验收需另核实。PR 仅收录当前仓库核实过的真实链接，state 使用 open、merged、closed，可选 is_draft。列表字段提交当前完整记录，局部信息不足时省略，只有确认要清除才提交空数组。没有变化时可跳过新建快照，继续处理队列。
+
+执行 python pulse-onboard.py sync-ember --work-dir "<work_dir>"，核对各仓库的 ember_posts 回执。从 Ember 项目总览和讨论读回验证。published 表示已经发布，unchanged 表示内容已处理，superseded 表示已有更新的版本，pending 留待原队列重试。凭据或频道错误要报告。已入队的内容和版本保持原样。
+
+另一条链路负责 Pulse 原始会话和 Token。用 prepare --exclude-session-id "<本轮上报会话 UUID>" 和 sync-pulse --work-dir "<Pulse work_dir>" 核对采集与回执。优先按原 work_dir 重试已经生成的 Pulse 计划；没有计划时在 Pulse 恢复后重新 prepare。保持原批次与游标，勿重置游标、估算 Token 或全量重导。包内 PULSE-PROMPT.txt 和 README.md 可查 Pulse 采集细节，那里涉及 Pulse 的试报及设备身份都独立验收。
+
+分别报告 Ember 项目及发布回执、Pulse 回执和待重试事项。Ember 的首次更新通过后，启用或更新原来的每 30 分钟任务；定时执行时只完成本轮，不重复创建任务。

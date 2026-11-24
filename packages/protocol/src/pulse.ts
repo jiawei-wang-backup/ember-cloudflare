@@ -32,6 +32,8 @@ export const pulseStatusLabels = {
 } as const;
 export type PulseStatus = keyof typeof pulseStatusLabels;
 export interface PulseSnapshot {
+  ember_snapshot?: boolean;
+  metrics_source?: string;
   freshness?: {status: "live" | "snapshot"; captured_at: string; reason?: string};
   team?: PulseTeam;
   introduction?: PulseIntroduction;

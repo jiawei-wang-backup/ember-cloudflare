@@ -6,6 +6,7 @@ import type { EmberTool, Unlogged } from "./assistant/tool-calls";
 import { dashboardProject, ProjectNotReported } from "./pulse-dashboard";
 import {DashboardCache, fetchDashboard, type BackgroundWork} from "./pulse-dashboard-cache";
 import { pulseIntroduction } from "./pulse-context";
+import { projectOverview } from "./project-snapshot";
 import { businessOverview } from "./pulse-business";
 
 const dashboards = new DashboardCache();
@@ -36,7 +37,7 @@ function teamProjectKey(env: Env, room: Pick<SharedRoom, "kind" | "channelGroup"
   } catch {return undefined;}
 }
 
-export async function pulseSnapshot(env: Env, projectId: string, days = 7, background?: BackgroundWork, refresh = false): Promise<PulseSnapshot> {
+export async function pulseSnapshot(env: Env, projectId: string, days = 7, background?: BackgroundWork, refresh = false, timeout = 8000): Promise<PulseSnapshot> {
   if (!env.PULSE_URL || (env.PULSE_SOURCE !== "dashboard" && !env.PULSE_TOKEN)) throw new Error("Project Pulse 服务未配置");
   if (![1,7,30].includes(days)) throw new Error("无效时间窗");
   const base = new URL(env.PULSE_URL);
@@ -45,7 +46,7 @@ export async function pulseSnapshot(env: Env, projectId: string, days = 7, backg
     const url = new URL(`/api/v1/dashboard?days=${days}`, base);
     const saved = demoSnapshot(env, projectId, days, url);
     try {
-      const result = saved ? await dashboards.read(url, env.PULSE_TOKEN, background, refresh) : {data: await fetchDashboard(url, env.PULSE_TOKEN), capturedAt: Date.now(), stale: false};
+      const result = saved && timeout === 8000 ? await dashboards.read(url, env.PULSE_TOKEN, background, refresh) : {data: await fetchDashboard(url, env.PULSE_TOKEN, timeout), capturedAt: Date.now(), stale: false};
       const data = dashboardProject(result.data, projectId, days, url.toString(), new Date(result.capturedAt));
       return {...data, freshness: {status: result.stale ? "snapshot" : "live", captured_at: data.fetched_at}};
     } catch (error) {
@@ -53,7 +54,7 @@ export async function pulseSnapshot(env: Env, projectId: string, days = 7, backg
       throw error;
     }
   }
-  const response = await fetch(new URL(`/api/v1/projects/${encodeURIComponent(projectId)}?days=${days}`, base), {headers:{Authorization:`Bearer ${env.PULSE_TOKEN}`},redirect:"manual",signal:AbortSignal.timeout(8000)});
+  const response = await fetch(new URL(`/api/v1/projects/${encodeURIComponent(projectId)}?days=${days}`, base), {headers:{Authorization:`Bearer ${env.PULSE_TOKEN}`},redirect:"manual",signal:AbortSignal.timeout(timeout)});
   if (!response.ok) throw new Error(`Project Pulse 返回 ${response.status}`);
   const data = await response.json() as PulseSnapshot;
   if (data.project?.repository_id !== projectId) throw new Error("Project Pulse 项目身份不匹配");
@@ -65,26 +66,38 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   if (!credentials) return Response.json({error:"未登录"},{status:401,headers});
   const settings = isRoomId(roomId) && await workspace(env).roomSettings(credentials, roomId);
   if (!settings || settings === "not found") return Response.json({error:"频道不可访问"},{status:404,headers});
+  const query = new URL(request.url).searchParams;
+  const days = Number(query.get("days") || 7);
+  if (![1,7,30].includes(days)) return Response.json({error:"时间窗仅支持 1、7、30 天"},{status:422,headers});
   const explicit = pulseBinding(env, roomId);
   const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true" && settings.room.kind === "closed"
     ? (await workspace(env).teamProjectBindings([roomId]))[roomId] : undefined;
   const sharedKey = teamProjectKey(env, settings.room, registered?.repository);
-  const binding = explicit ?? (sharedKey ? {
-    projectId: sharedKey, memberIds: settings.people.filter(person => person.member).map(person => person.id)
+  const stored = settings.room.kind === "closed" && (explicit || settings.room.channelGroup === "project")
+    ? await env.CHAT_ROOM.getByName(roomId).projectSnapshot(roomId, explicit?.projectId ?? registered?.repository ?? null)
+    : null;
+  const local = stored ? projectOverview(stored, days) : null;
+  const key = sharedKey ?? local?.project.key;
+  const binding = explicit ?? (key ? {
+    projectId: key, memberIds: settings.people.filter(person => person.member).map(person => person.id)
   } : null);
   if (!binding) return Response.json({error:"频道未关联 Project Pulse"},{status:404,headers});
   const user = await workspace(env).authenticate(credentials);
   if (!user || !(explicit?.allRoomMembers === true ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return Response.json({error:"没有项目数据权限"},{status:403,headers});
-  if(new URL(request.url).searchParams.get("audience")==="room"&&!await workspace(env).canSharePulse(roomId as RoomId,user.id,binding.memberIds,explicit?.allRoomMembers === true))return Response.json({error:"频道读者未全部获得项目授权"},{status:403,headers});
-  const days=Number(new URL(request.url).searchParams.get("days") || 7);
-  if (![1,7,30].includes(days)) return Response.json({error:"时间窗仅支持 1、7、30 天"},{status:422,headers});
+  if(query.get("audience")==="room"&&!await workspace(env).canSharePulse(roomId,user.id,binding.memberIds,explicit?.allRoomMembers === true))return Response.json({error:"频道读者未全部获得项目授权"},{status:403,headers});
   try {
-    const data = await pulseSnapshot(env,binding.projectId,days,background,new URL(request.url).searchParams.get("refresh") === "1");
+    let data = local ?? await pulseSnapshot(env,binding.projectId,days,background,query.get("refresh") === "1");
+    if (local && query.get("metrics") === "1" && env.PULSE_URL) {
+      const metrics = await pulseSnapshot(env,binding.projectId,days,background,query.get("refresh") === "1", 1200).catch(() => null);
+      if (metrics) data = {...data, usage: metrics.usage, members: metrics.members, models: metrics.models,
+        window: metrics.window, cost: metrics.cost, quota: metrics.quota, metrics_source: metrics.source};
+    }
     const directory = await workspace(env).directory(credentials);
     const members = settings.people.filter(p => p.member).map(person => ({id: person.id, name: person.name, bot: directory?.find(p => p.id === person.id)?.role === "bot"}));
-    const ownerId = registered?.ownerId ?? (sharedKey ? settings.creatorId : undefined);
+    const ownerId = explicit?.ownerId ?? registered?.ownerId ?? (key ? settings.creatorId : undefined);
     const owner = members.find(member => member.id === ownerId && !member.bot);
-    return Response.json({...data, business: businessOverview(data), can_adopt: settings.canAdminister, introduction: pulseIntroduction(binding.projectId), team: {people: members.filter(p => !p.bot).length, bots: members.filter(p => p.bot).length, members, ...(registered && {owner: owner ? {id: owner.id, name: owner.name} : null})}}, {headers});
+    if (local && owner) data = {...data, project: {...data.project, owner: {display_name: owner.name}}};
+    return Response.json({...data, business: businessOverview(data), can_adopt: settings.canAdminister, introduction: pulseIntroduction(binding.projectId), team: {people: members.filter(p => !p.bot).length, bots: members.filter(p => p.bot).length, members, ...((registered || local) && {owner: owner ? {id: owner.id, name: owner.name} : null})}}, {headers});
   }
   catch (error) {
     if (error instanceof ProjectNotReported) return Response.json({code:"project_not_reported",error:error.message},{status:404,headers});
@@ -109,7 +122,11 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
     return projectId ? [{room, projectId}] : [];
   });
   const results = await Promise.all(rooms.map(async ({room, projectId}) => {
-    try { const data = await pulseSnapshot(env, projectId, 7, background); return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness}; }
+    try {
+      const local = room.kind === "closed" && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId);
+      const data = local ? projectOverview(local, 7) : await pulseSnapshot(env, projectId, 7, background);
+      return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness};
+    }
     catch { return {roomId: room.id, name: room.name, progress: null}; }
   }));
   return Response.json({projects: results}, {headers});
@@ -129,7 +146,9 @@ export function projectTools(env: Env, roomId: RoomId, askerId: UserId): (Omit<E
     if (!await workspace(env).canSharePulse(roomId,askerId,binding.memberIds,binding.allRoomMembers === true)) throw new Error("频道中存在未获项目授权的成员，不能公开回答项目数据");
     const days=input.days ?? 7;
     if (![1,7,30].includes(days as number)) throw new Error("无效时间窗");
-    const data=await pulseSnapshot(env,binding.projectId,days as number);
+    const metrics = ["get_project_members", "get_project_usage", "get_project_quota"].includes(name);
+    const local = !metrics && await env.CHAT_ROOM.getByName(roomId).projectSnapshot(roomId, binding.projectId);
+    const data=local ? projectOverview(local, days as number) : await pulseSnapshot(env,binding.projectId,days as number);
     const record={...data, business: businessOverview(data)} as unknown as Record<string,unknown>;
     return {unlogged: true as const, text: JSON.stringify({project_id:binding.projectId,fetched_at:data.fetched_at,source:data.source,window:data.window,caveats:data.caveats,...Object.fromEntries(keys.map(k=>[k,record[k]]))})};
   }}));

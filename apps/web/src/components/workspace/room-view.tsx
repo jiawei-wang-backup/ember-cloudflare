@@ -69,7 +69,8 @@ export interface RoomViewHandle {
 }
 
 export function RoomView({ room, messageId, threadId, replyId, invitation, onDismissInvitation, me, favorite, gone, onStarred, involvement, newSince = null, askForRoom, onSessionChanged, onFailed, onGone, ref }: Props) {
-  const projectWorkspace = useAccount().name === "Project Pulse · 研发协作中心";
+  const projectWorkspace = useAccount().name === "Project Pulse · 研发协作中心" ||
+    (room.kind !== "direct" && room.channelGroup === "project");
   const [project, setProject] = useState<PulseSnapshot | null>(null);
   const [selection, setSelection] = useState<ProjectSelection | null>(null);
   const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft | null>(null);

@@ -1,0 +1,11 @@
+请用 r24 ZIP 接入 Ember 项目更新，Project Pulse 用于原始 Codex 会话和 Token 统计。核对 ZIP 与包内 SHA256SUMS，解压到长期使用的私有目录，运行 pulse-onboard.py links 核对服务地址。升级时保留原 Ember 授权、项目选择、频道、采集游标和 .pulse-pending，更新已有的上报任务及提示词。
+
+首次接入只读盘点本机项目。列出完整 GitHub owner/repo、中文项目名和已识别主会话数，等我明确选定项目后，才在 .pulse-project-selection.json 保存 schema_version: 1、confirmed_at、选中项目的 repository、project_name、source_ids、已核实的本机路径别名，以及 ember_paired: uploaded-sessions。成员代答仅覆盖本人已绑定的项目频道。
+
+1. 用本人账号在浏览器完成 ember-connect.py connect --project-channels。运行 pulse-onboard.py bind-channels。先查询 Ember 的频道，再按完整仓库名复用已有频道，确认没有才创建私有频道。若匹配冲突、缺权限或无法核对旧绑定，记录待处理。
+2. 按包内 PROMPT.txt 整理有依据、可供频道成员查看的项目进展。运行 pulse-onboard.py prepare-ember，把 ember-projects.json 写入返回的 work_dir，再运行 pulse-onboard.py sync-ember --work-dir "<work_dir>"。检查 ember_posts 并读回 Ember 项目总览和讨论。这一步在 Pulse 无法访问时照常执行。
+3. 如需同步会话和 Token，独立运行 pulse-onboard.py prepare，再运行 pulse-onboard.py sync-pulse --work-dir "<Pulse work_dir>"，核对 report 和 usage_verified。需要在 Pulse 展示 Ember 成员身份时，另运行 bind-pulse-device。Pulse 故障时保留待发批次和游标，恢复后原样重试。支持用同一个已有 Pulse work_dir 同时保存 ember-projects.json，再运行 submit，两端会分别处理并返回回执。
+4. Ember 失败时，恢复授权或连接后运行 sync-ember，同一快照和频道消息不会重复发布。失败修复前保留原工作目录。start-listener 可单独启动成员代答，用另一成员在已绑定频道发起真实 @ 验收。
+5. 首轮 Ember 更新验证通过后，创建或更新原有的每 30 分钟任务，使用包内 PROMPT.txt 作为任务正文。每轮先更新 Ember，再尽力补传 Pulse，会话和 Token 不能估计或重复累计。
+
+分别回报 Ember 项目快照、讨论发布和实际 @ 验收，以及 Pulse 采集回执或待重试原因。凭据由本机工具与浏览器处理。

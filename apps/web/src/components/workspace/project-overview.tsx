@@ -12,7 +12,8 @@ const shortName = (name: string) => name.replace(/\s*[·•]\s*[a-f\d]{8,}$/i, "
 const pullStates: Record<string, string> = {open: "待处理", merged: "已合并", closed: "已关闭"};
 
 function monitorProjectUrl(data: PulseSnapshot) {
-  const source = URL.canParse(data.source) ? new URL(data.source) : null;
+  const value = data.metrics_source ?? data.source;
+  const source = URL.canParse(value) ? new URL(value) : null;
   if (!source || !["http:", "https:"].includes(source.protocol) || source.pathname !== "/api/v1/dashboard" || source.username || source.password) return null;
   return source.origin + "/#/projects/" + encodeURIComponent(data.project.full_name);
 }
@@ -100,7 +101,7 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
       if (controller.signal.aborted || pending) return;
       pending = true;
       try {
-        const url = `/api/rooms/${encodeURIComponent(roomId)}/project?days=${days}${refresh ? "&refresh=1" : ""}`;
+        const url = `/api/rooms/${encodeURIComponent(roomId)}/project?days=${days}${refresh ? "&refresh=1" : ""}${compact && expanded ? "&metrics=1" : ""}`;
         const response = await fetch(url, {signal: controller.signal, credentials: "same-origin", cache: "no-store"});
         if (controller.signal.aborted) return;
         if (response.status === 404 || response.status === 403) {
@@ -147,7 +148,7 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
       clearInterval(timer);
       document.removeEventListener("visibilitychange", refreshVisible);
     };
-  }, [roomId, days, revision]);
+  }, [roomId, days, revision, compact, compact && expanded]);
   if (error) return <div role="alert" className="flex shrink-0 items-center justify-between border-b px-4 py-2 text-xs">{error}<button className="rounded border px-2 py-1 hover:bg-hover" onClick={() => setRevision(n => n + 1)}>重试</button></div>;
   // Keep the room-header statistics slot visible while loading and on unbound rooms.
   if (!data && compact) return <div role="status" className="ml-auto flex min-h-8 shrink-0 items-center rounded-md border bg-card px-2.5 text-xs text-message-muted">{loading ? "正在加载项目统计…" : "此频道尚未绑定 Project Pulse"}</div>;
@@ -199,7 +200,7 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
         </div>
         {data.project.goal && <p className="line-clamp-1 shrink-0 text-xs leading-relaxed text-message-muted max-md:hidden" title={data.project.goal}>{data.project.goal}</p>}
         <ProjectDetails data={data}/>
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t pt-2 text-[10px] text-muted-foreground"><span>数据来自 Project Pulse</span><span title={time(data.fetched_at)}>更新于 {new Date(data.fetched_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"})}</span></div>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t pt-2 text-[10px] text-muted-foreground"><span>{data.ember_snapshot ? "Ember 项目快照" : "数据来自 Project Pulse"}</span><span title={time(data.fetched_at)}>更新于 {new Date(data.fetched_at).toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"})}</span></div>
       </div>
     </div>
   </section>;

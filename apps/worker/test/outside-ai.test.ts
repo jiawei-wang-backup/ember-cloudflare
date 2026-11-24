@@ -1122,6 +1122,37 @@ it("creates a private project channel only with the granted scopes and reuses it
   expect((await called(allowed, "send_message", {room_id: room.id, text: "已完成首次同步"})).isError).toBeFalsy();
 });
 
+it("stores project updates without Pulse and publishes each revision only once", async () => {
+  const {member, administrator} = await setUpOn();
+  const scope = "read write private create_project_channels";
+  const token = (await connected(member, {scope}, [], ["private", "create_project_channels"])).tokens.access_token;
+  const repository = "example/independent";
+  const {room} = await found<{room: {id: string}}>(token, "create_project_channel", {repository});
+  const sync = (revision: string, observedAt: string, facts: object) => found<{status: string}>(token, "sync_project_snapshot", {
+    room_id: room.id, repository, update_json: JSON.stringify({revision, observedAt, facts}),
+  });
+  const time = Date.now() - 100;
+  const first = new Date(time).toISOString(), second = new Date(time + 1).toISOString();
+  const a = "a".repeat(32), b = "b".repeat(32);
+  expect((await sync(a, first, {goal: "Persist work", progress: ["First delivery"]})).status).toBe("published");
+  expect((await sync(b, second, {progress: ["Second delivery"]})).status).toBe("published");
+  expect((await sync(b, second, {progress: ["Second delivery"]})).status).toBe("unchanged");
+  expect((await sync(a, first, {goal: "Persist work", progress: ["First delivery"]})).status).toBe("superseded");
+  const url = `/api/rooms/${room.id}/project?audience=room`;
+  const response = await api(url, {headers: as(member)});
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    ember_snapshot: true, project: {goal: "Persist work", owner: {display_name: member.user.name}},
+    activities: [{title: "Second delivery"}], usage: {input_tokens: null},
+  });
+  expect((await api(url, {headers: as(administrator)})).status).toBe(404);
+  expect(await found(token, "read_project_snapshot", {room_id: room.id})).toMatchObject({
+    snapshot: {repository, facts: {goal: "Persist work", progress: ["Second delivery"]}},
+  });
+  const history = await found<{messages: unknown[]}>(token, "read_room", {room_id: room.id});
+  expect(history.messages).toHaveLength(2);
+});
+
 it("uses a Chinese project title and reuses the registered room in the LAN workspace", async () => {
   const { member } = await setUpOn();
   const scope = "read write private create_project_channels";

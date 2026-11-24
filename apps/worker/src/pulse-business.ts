@@ -61,7 +61,7 @@ export function businessOverview(data: PulseSnapshot): BusinessOverview | undefi
         acceptance: "", availability: "", milestones, available: done.map(stage => stage.title),
         blockers: pending.map(stage => stage.title), status: data.project.status === "blocked" ? "blocked" :
           pending.length ? "pending" : done.length ? "recorded" : "unknown"}],
-      provenance: "来自 Project Pulse 项目报告"
+      provenance: data.ember_snapshot ? "来自 Ember 项目快照" : "来自 Project Pulse 项目报告"
     };
   }
   const used = new Set<string>();
@@ -85,5 +85,7 @@ export function businessOverview(data: PulseSnapshot): BusinessOverview | undefi
     const stages = involved.flatMap(m => m.milestones), recorded = stages.filter(m => ["completed", "accepted"].includes(m.state)).length;
     return {...journey, acceptance: involved.map(m => m.acceptance).join(" "), recorded, total: stages.length, state: involved.some(m => m.status === "blocked") ? "blocked" as const : involved.length > 0 && involved.every(m => m.status === "recorded") ? "awaiting_acceptance" as const : "pending" as const};
   });
-  return {audience: definition.audience, outcome: definition.outcome, modules, journeys: delivery, provenance: "业务模块与交付闭环依据项目目标整理；阶段状态与证据逐项引用监控来源。记录完成不等于当前可用或业务验收。"};
+  return {audience: definition.audience, outcome: definition.outcome, modules, journeys: delivery, provenance: data.ember_snapshot
+    ? "阶段状态和证据来自 Ember 项目快照。项目可用性与业务验收独立记录。"
+    : "业务模块与交付闭环依据项目目标整理；阶段状态与证据逐项引用监控来源。记录完成不等于当前可用或业务验收。"};
 }

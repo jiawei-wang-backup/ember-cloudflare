@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import os
 import json
-import hashlib
 import importlib.util
 import re
 from pathlib import Path
@@ -102,7 +101,7 @@ def resolve_project_channels():
     connector = load_connector()
     results = []
     paired = selection.get("ember_paired") == PAIRED_SCOPE
-    projects = [project for project in selection["projects"] if paired or project.get("ember_publish") is not False]
+    projects = [project for project in selection["projects"] if project.get("ember_publish") is not False or (paired and project.get("ember_room_id"))]
     if not projects:
         return results
     rooms = {row["id"]: row for row in connector.call_tool("list_rooms", {})["rooms"] if row["kind"] != "direct"}
@@ -200,29 +199,6 @@ def verify_projects():
     return results
 
 
-def project_snapshot(project_key, sources):
-    project, sessions = reported_project_sessions(project_key, sources)
-    if not project:
-        return None
-    status_labels = {"on_track": "在研", "blocked": "受阻", "completed": "已完成", "paused": "已暂停"}
-    status = status_labels.get((project.get("status") or {}).get("state"))
-    goal = plain(project.get("goal"))
-    milestones = [("已完成" if item["state"] == "completed" else "待完成") + " · " + plain(item["title"])
-                  for item in project.get("milestones") or []]
-    # Use one stable, bounded snapshot of the approved device's reported summaries.
-    ordered = sorted(sessions, key=lambda row: (str(row.get("observed_at") or ""), row["source_id"]), reverse=True)
-    progress = list(dict.fromkeys(plain(row["summary"]) for row in ordered if row.get("summary")))[:3]
-    if not status and not goal and not milestones and not progress:
-        return None
-    lines = [f"项目进展 · {plain(project_key)}"]
-    if status:
-        lines.append("状态 · " + status)
-    if goal:
-        lines.append("目标 · " + goal)
-    lines.extend(progress + milestones[:8])
-    return "\n\n".join(lines)
-
-
 def write_state(path, record):
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as stream:
@@ -233,9 +209,9 @@ def write_state(path, record):
 
 
 @contextmanager
-def publication_lock():
-    PENDING.mkdir(mode=0o700, exist_ok=True)
-    with (PENDING / "ember-publication.lock").open("a+b") as lock:
+def file_lock(path):
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    with path.open("a+b") as lock:
         if sys.platform == "win32":
             import msvcrt
             lock.seek(0)
@@ -246,71 +222,93 @@ def publication_lock():
         yield
 
 
-def publish_progress(channels):
+def publication_lock():
+    return file_lock(PENDING / "ember-publication.lock")
+
+
+def ember_projects():
     approved_sources()
     selection = json.loads((PACKAGE / ".pulse-project-selection.json").read_text(encoding="utf-8-sig"))
-    paired = selection.get("ember_paired") == PAIRED_SCOPE
-    verified = {(item["project"], item["room_id"]) for item in channels if "room_id" in item}
-    targets = [p for p in selection["projects"]
-               if (p.get("repository") or p.get("workspace_name"), p.get("ember_room_id")) in verified
-               and (paired or p.get("ember_publish") is not False)]
-    if not targets:
-        return []
+    return {
+        project["repository"].lower()
+        for project in selection["projects"]
+        if project.get("repository") and project.get("ember_publish") is not False
+    }
+
+
+def stage_progress(work):
+    source = work / "ember-projects.json"
+    queue = work / "ember-queued.json"
+    if not source.is_file() or queue.is_file():
+        return
+    approved = ember_projects()
+    entries = json.loads(source.read_text(encoding="utf-8-sig"))
+    if not isinstance(entries, list):
+        raise ValueError("ember-projects.json 必须是数组")
+    observed = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    updates = {}
+    for entry in entries:
+        raw_repo = entry.get("repository") if isinstance(entry, dict) else None
+        repo = raw_repo.lower() if isinstance(raw_repo, str) else ""
+        if repo not in approved or repo in updates:
+            raise ValueError("Ember 快照必须对应唯一且已确认发布的项目仓库")
+        facts = {key: value for key, value in entry.items() if key != "repository"}
+        if not facts or not facts.keys() <= {"goal", "status", "progress", "milestones", "pulls"}:
+            raise ValueError("Ember 快照只接受项目摘要、目标、状态、里程碑和 PR")
+        updates[repo] = {"revision": uuid.uuid4().hex, "observedAt": observed, "facts": facts}
+    write_state(queue, {"updates": updates, "receipts": {}})
+
+
+def publish_progress(channels):
+    approved = ember_projects()
+    verified = {item["project"].lower(): item["room_id"] for item in channels if "room_id" in item}
     results = []
     with publication_lock():
         connector = load_connector()
-        for project in targets:
-            room_id = project["ember_room_id"]
-            label = project.get("repository") or project["workspace_name"]
-            result = {"project": label, "channel": f"{EMBER}/rooms/{room_id}"}
+        pending = []
+        for path in PENDING.glob("*/ember-queued.json"):
+            state = json.loads(path.read_text(encoding="utf-8"))
+            pending.extend((update["observedAt"], repo, path, update)
+                           for repo, update in state["updates"].items() if repo not in state["receipts"])
+        blocked = set()
+        for _, repo, path, update in sorted(pending):
+            if repo in blocked:
+                continue
+            result = {"project": repo, "work_dir": str(path.parent), "revision": update["revision"]}
             results.append(result)
+            room = verified.get(repo)
             try:
-                sources = sorted({str(uuid.UUID(source)) for source in project["source_ids"]})
-                sync_project(connector, result, label, room_id, sources)
-            except (ValueError, OSError, KeyError, RuntimeError, StopIteration, subprocess.SubprocessError) as exc:
-                result.update(status="待补发", error=str(exc))
+                if repo not in approved or not room:
+                    raise ValueError("项目范围或频道授权待核实")
+                result["channel"] = f"{EMBER}/rooms/{room}"
+                receipt = connector.call_tool("sync_project_snapshot", {
+                    "room_id": room, "repository": repo, "update_json": json.dumps(update, ensure_ascii=False),
+                })
+                if receipt.get("revision") != update["revision"] or receipt.get("status") not in (
+                    "published", "unchanged", "superseded",
+                ):
+                    raise ValueError("Ember 快照回执不匹配")
+                state = json.loads(path.read_text(encoding="utf-8"))
+                state["receipts"][repo] = receipt
+                write_state(path, state)
+                result.update(receipt)
+            except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
+                result.update(status="pending", error=str(exc))
+                blocked.add(repo)
     return results
 
 
-def sync_project(connector, result, label, room_id, sources):
-    # A changed project selection must never publish an older, differently scoped snapshot.
-    scope = hashlib.sha256(json.dumps([label.lower(), room_id, sources]).encode()).hexdigest()
-    key = hashlib.sha256(json.dumps([label.lower(), room_id]).encode()).hexdigest()[:20]
-    path = PENDING / ("ember-" + key + ".json")
-    state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    pending = state.get("pending")
-    if pending and pending["scope"] != scope:
-        pending = None
-    try:
-        body = project_snapshot(label, sources)
-    except (ValueError, OSError, KeyError, subprocess.SubprocessError):
-        if not pending:
-            raise
-        body = None
-    if body:
-        digest = hashlib.sha256(body.encode()).hexdigest()
-        if state.get("digest") == digest:
-            pending = None
-        elif not pending or pending["digest"] != digest:
-            pending = {"scope": scope, "digest": digest, "body": body}
-        # Persist the verified snapshot before attempting the network operation.
-        if pending != state.get("pending"):
-            write_state(path, {**state, "pending": pending})
-    if not pending:
-        result["status"] = "无新进展" if body else "暂无已核实进展"
-        return
-    update_id = "pulse" + pending["digest"][:16]
-    previous = connector.call_tool("read_room", {"room_id": room_id})
-    seen = any("同步编号 " + update_id in message["text"] for message in previous["messages"])
-    if not seen and pending.get("attempted_at"):
-        matches = connector.call_tool("search_messages", {"room_id": room_id, "words": update_id})
-        seen = bool(matches["matches"])
-    if not seen:
-        pending["attempted_at"] = datetime.now(timezone.utc).isoformat()
-        write_state(path, {**state, "pending": pending})
-        connector.call_tool("send_message", {"room_id": room_id, "text": pending["body"] + "\n\n同步编号 " + update_id})
-    write_state(path, {"digest": pending["digest"], "pending": None})
-    result["status"] = "已同步"
+def submit_pulse(work, sources):
+    if not (work / "plan.json").is_file():
+        raise ValueError("Pulse 没有可提交的计划，恢复后运行 prepare")
+    with file_lock(PENDING / "pulse-submission.lock"):
+        receipt = work / "pulse-receipt.json"
+        if receipt.is_file():
+            return json.loads(receipt.read_text(encoding="utf-8"))
+        result = collector("Submit", work, sources)
+        write_state(receipt, result)
+        (PENDING / "ember-context-revision").touch()
+        return result
 
 
 def start_listener():
@@ -365,11 +363,9 @@ def retry_ember(result, *, listener=False):
     except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
         result["ember_binding_error"] = str(exc)
     try:
-        bind_reporting_member(result)
-    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
-        result["ember_reporting_member"] = {"status": "pending", "error": str(exc)}
-    try:
         result["ember_posts"] = publish_progress(result.get("channels", []))
+        if result["ember_posts"]:
+            (PENDING / "ember-context-revision").touch()
     except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
         result["ember_error"] = str(exc)
     if listener:
@@ -378,7 +374,7 @@ def retry_ember(result, *, listener=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["links", "preflight", "verify-projects", "bind-channels", "sync-ember", "start-listener", "prepare", "submit"])
+    parser.add_argument("action", choices=["links", "preflight", "verify-projects", "bind-channels", "bind-pulse-device", "sync-ember", "start-listener", "prepare", "prepare-ember", "submit", "sync-pulse"])
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--exclude-session-id", type=lambda value: str(uuid.UUID(value)))
     parser.add_argument("--label")
@@ -399,38 +395,59 @@ def main():
             result["collector_ready"] = True
         elif args.action == "verify-projects":
             result["projects"] = verify_projects()
-        elif args.action in ("bind-channels", "sync-ember"):
-            retry_ember(result, listener=True)
         elif args.action == "start-listener":
             check_listener(result)
+        elif args.action == "bind-pulse-device":
+            bind_reporting_member(result)
         elif args.action != "links":
             sources = approved_sources()
-            if args.action == "prepare":
+            work = args.work_dir.resolve() if args.work_dir else None
+            if work and (work.parent != PENDING.resolve() or not work.is_dir()):
+                raise ValueError("请使用本轮准备上报返回的工作目录")
+            if args.action in ("prepare", "prepare-ember"):
                 PENDING.mkdir(mode=0o700, exist_ok=True)
                 work = PENDING / uuid.uuid4().hex
-            else:
-                work = args.work_dir.resolve() if args.work_dir else None
-                if not work or work.parent != PENDING.resolve() or not (work / "plan.json").is_file():
+                result["work_dir"] = str(work)
+                if args.action == "prepare-ember":
+                    work.mkdir(mode=0o700)
+                else:
+                    result["report"] = collector("Prepare", work, sources, args.exclude_session_id, args.label, args.github_login)
+            elif args.action in ("bind-channels", "sync-ember", "submit", "sync-pulse"):
+                if args.action in ("submit", "sync-pulse") and not work:
                     raise ValueError("请使用本轮准备上报返回的工作目录")
-            result["work_dir"] = str(work)
-            result["report"] = collector(args.action.capitalize(), work, sources, args.exclude_session_id,
-                                         args.label, args.github_login)
-            if args.action == "submit":
-                (PENDING / "ember-context-revision").touch()
-                retry_ember(result)
+                if work:
+                    result["work_dir"] = str(work)
+                if args.action != "sync-pulse":
+                    if work:
+                        try:
+                            with publication_lock():
+                                stage_progress(work)
+                        except (ValueError, OSError, KeyError, TypeError) as exc:
+                            result["ember_stage_error"] = str(exc)
+                    retry_ember(result, listener=args.action == "bind-channels")
+                if args.action in ("submit", "sync-pulse"):
+                    try:
+                        result["report"] = submit_pulse(work, sources)
+                    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
+                        result["pulse_error"] = str(exc)
+                if args.action == "submit":
+                    bind_reporting_member(result)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
         result["error"] = str(exc)
     binding = result.get("ember_reporting_member", {})
     listener = result.get("ember_member_listener")
-    if args.action in ("bind-channels", "sync-ember", "submit", "start-listener"):
+    if args.action in ("bind-channels", "bind-pulse-device", "sync-ember", "submit", "sync-pulse", "start-listener"):
         incomplete = []
+        if "pulse_error" in result:
+            incomplete.append("pulse")
+        if "ember_stage_error" in result:
+            incomplete.append("ember_stage")
         if "ember_binding_error" in result or any("error" in item for item in result.get("channels", [])):
             incomplete.append("channels")
         if "ember_member_listener_error" in result or (listener and listener not in ("已有监听进程", "监听已启动")):
             incomplete.append("ember_member_listener")
         if binding and binding.get("status") != "bound":
-            if args.action != "bind-channels" or binding.get("status") != "waiting_for_report":
-                incomplete.append("ember_reporting_member")
+            incomplete.append("ember_reporting_member")
         if "ember_error" in result or any("error" in item for item in result.get("ember_posts", [])):
             incomplete.append("ember_posts")
         if incomplete:

@@ -68,6 +68,38 @@ class OnboardingTest(unittest.TestCase):
         self.assertEqual(result[0]["room_id"], "existing")
         self.assertEqual(json.loads(self.selection.read_text())["projects"][0]["ember_room_id"], "existing")
 
+    def test_snapshot_is_queued_on_failure_and_retried_without_pulse(self):
+        room = {"id": "existing", "kind": "closed"}
+        connector = Mock(ORIGIN="https://ember.example")
+
+        def response(tool, arguments):
+            if tool == "list_rooms":
+                return {"rooms": [room]}
+            if tool == "find_project_channel":
+                return {"status": "matched", "room": room}
+            update = json.loads(arguments["update_json"])
+            return {"status": "published", "revision": update["revision"]}
+
+        with patch.object(onboard, "load_connector", return_value=connector), patch.object(onboard, "collector") as collector:
+            status, prepared = self.run_command("prepare-ember")
+            self.assertEqual(status, 0)
+            work = Path(prepared["work_dir"])
+            (work / "ember-projects.json").write_text(json.dumps([{
+                "repository": "example/project", "progress": ["Verified work"],
+            }]), encoding="utf-8")
+            connector.call_tool.side_effect = OSError("Ember offline")
+            status, failed = self.run_command("sync-ember", "--work-dir", str(work))
+            self.assertEqual(status, 2)
+            self.assertIn("ember_posts", failed["incomplete"])
+            revision = failed["ember_posts"][0]["revision"]
+            connector.call_tool.side_effect = response
+            status, restored = self.run_command("sync-ember")
+            self.assertEqual(status, 0)
+            self.assertEqual(restored["ember_posts"][0]["revision"], revision)
+            self.assertEqual(restored["ember_posts"][0]["status"], "published")
+            self.assertEqual(self.run_command("sync-ember")[1]["ember_posts"], [])
+            collector.assert_not_called()
+
     def test_only_missing_allows_creation(self):
         for state in ("forbidden", "ambiguous", "missing"):
             with self.subTest(state=state):

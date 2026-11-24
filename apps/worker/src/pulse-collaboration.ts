@@ -5,6 +5,7 @@ import { workspace } from "./workspace";
 import { pulseBinding, pulseSnapshot } from "./pulse";
 import { escapeText } from "./bots/mrkdwn";
 import { ask } from "./assistant/gateway";
+import {projectOverview} from "./project-snapshot";
 import {businessDefinition} from "./pulse-business";
 
 const headers = {"Cache-Control": "no-store"};
@@ -73,7 +74,8 @@ export async function pulseCollaboration(request: Request, env: Env, id: string,
   const messages = await env.CHAT_ROOM.getByName(roomId).messagesWithIds(roomId, input.messageIds);
   if (messages.length !== input.messageIds.length || messages.some(m => m.deleted)) return problem(409, "所选消息已变化或不属于此项目，请重新选择");
   try {
-    const data = await pulseSnapshot(env, binding.projectId);
+    const local = await env.CHAT_ROOM.getByName(roomId).projectSnapshot(roomId, binding.projectId);
+    const data = local ? projectOverview(local, 7) : await pulseSnapshot(env, binding.projectId);
     const excerpts = messages.map(m => ({id: m.id, author: m.creator.name, text: adoptionExcerpt(m.plainText), path: m.parentId ? threadPath(roomId, m.parentId, m.id) : `/rooms/${roomId}/@${m.id}`}));
     const pending = data.milestones.filter(m => !["completed", "accepted"].includes(m.state));
     let mode: PulseAdoptionAnswer["mode"] = "structured";
