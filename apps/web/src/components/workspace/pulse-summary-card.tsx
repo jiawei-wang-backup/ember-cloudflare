@@ -4,6 +4,7 @@ import type {DisplayNode} from "@ember/richtext/dom";
 import {CheckCircle, Group, NavArrowDown, Page, WarningTriangle} from "@/components/icons/iconoir";
 import {cn} from "@/lib/utils";
 import {MessageBody} from "./message-body";
+import {CompactReply} from "./compact-reply";
 
 const layout = {
   做到哪了: {icon: CheckCircle, tone: "bg-positive/10 text-positive"},
@@ -42,30 +43,27 @@ export function PulseSummaryCard({nodes, mentions, className, trailing}: {
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-message-muted"><Page className="size-4" aria-hidden="true"/></span>
       <div className="min-w-0">
         <h4 className="text-sm font-semibold">{title}</h4>
-        {header?.content.length ? <MessageBody nodes={header.content} mentions={mentions} className="mt-1 break-words text-xs leading-relaxed text-message-muted"/> : null}
+        {header?.content.length ? <CompactReply nodes={header.content} mentions={mentions} className="mt-1 break-words text-xs leading-relaxed text-message-muted"/> : null}
       </div>
     </div>
     <div className="space-y-3 px-3.5 py-3 sm:px-4">
-      {notes.map(({label, content}, index) => <div key={index} className="text-xs leading-relaxed text-message-muted">
-        {label && <strong>{label}</strong>}<MessageBody nodes={content} mentions={mentions}/>
-      </div>)}
       <dl className="space-y-3">
         {summary.map(({label, content}, index) => {
           const {icon: Icon, tone} = layout[label as keyof typeof layout];
           return <div key={index} className="grid grid-cols-[1.75rem_minmax(0,1fr)] items-start gap-x-2.5">
             <span className={cn("row-span-2 grid size-7 place-items-center rounded-lg", tone)}><Icon className="size-4" aria-hidden="true"/></span>
             <dt className="text-xs font-semibold">{label}</dt>
-            <dd className="mt-0.5 min-w-0 break-words text-sm leading-relaxed text-message-muted"><MessageBody nodes={content} mentions={mentions}/></dd>
+            <dd className="mt-0.5 min-w-0 break-words text-sm leading-relaxed text-message-muted"><CompactReply nodes={content} mentions={mentions}/></dd>
           </div>;
         })}
       </dl>
     </div>
-    {sources.length > 0 && <details className="group/sources border-t bg-surface">
+    {notes.length + sources.length > 0 && <details className="group/sources border-t bg-surface">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-medium hover:bg-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-4 [&::-webkit-details-marker]:hidden">
-        <NavArrowDown className="size-4 group-open/sources:rotate-180" aria-hidden="true"/>查看原始记录
+        <NavArrowDown className="size-4 group-open/sources:rotate-180" aria-hidden="true"/>详情和链接
       </summary>
       <ul className="space-y-2 px-3.5 pb-3 text-xs leading-relaxed sm:px-4">
-        {sources.map(({label, content}, index) => <li key={index} className="min-w-0 break-words">
+        {[...notes, ...sources].map(({label, content}, index) => <li key={index} className="min-w-0 break-words">
           {label && <span className="font-medium text-message-muted">{label} </span>}
           <MessageBody nodes={content} mentions={mentions} className="inline"/>
         </li>)}

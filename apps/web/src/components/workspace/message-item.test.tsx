@@ -5,6 +5,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { FlashProvider } from "@/components/flash";
+import { AccountContext, useAccount } from "@/hooks/use-account";
 import { DirectoryLoaded, PeopleContext, type People } from "@/hooks/use-directory";
 import { RefusedUnboosts, RoomConnection } from "@/hooks/use-room";
 import { timeLabel } from "@/lib/messages";
@@ -66,6 +67,55 @@ it("hides standalone generated event IDs while keeping the disclosure and ordina
   expect(screen.getByText(marker)).toBeVisible();
 });
 
+it("folds a Codex mention reply but keeps the same human message expanded", async () => {
+  const reply = {body:'<p>先等验收。</p><p><a href="https://example.org/review">验收链接</a></p>', plainText:"先等验收。\n验收链接"};
+  const {update, user} = show(message({...reply, clientMessageId:"member-codex-0000000000000000"}));
+  expect(screen.getByText("先等验收。")).toBeVisible();
+  expect(screen.queryByRole("link", {name:"验收链接"})).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name:"详情和链接"}));
+  expect(screen.getByRole("link", {name:"验收链接"})).toBeVisible();
+  update(message(reply));
+  expect(screen.queryByRole("button", {name:"收起详情"})).not.toBeInTheDocument();
+  expect(screen.getByRole("link", {name:"验收链接"})).toBeVisible();
+});
+
+it("shows the progress first for an existing snapshot posted under a member's name", async () => {
+  const lead = "导出已修复，等业务验收。";
+  const details = "核对部署环境和验收回执。";
+  const {user} = show(message({
+    clientMessageId:`project-snapshot-${"a".repeat(32)}`,
+    plainText:["项目进展 · example/project", "状态 · 待确认", "目标 · 修复导出", lead, details].join("\n\n"),
+  }));
+  expect(screen.getByText("项目进展 · 自动同步")).toBeVisible();
+  expect(screen.getByText(lead)).toBeVisible();
+  expect(screen.queryByText("目标 · 修复导出")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name:"详情和链接"}));
+  expect(screen.getByText(/目标 · 修复导出/)).toBeVisible();
+  expect(screen.getByText(new RegExp(details))).toBeVisible();
+});
+
+it("shows one line for an older GitHub delivery and keeps its original links available", async () => {
+  const {user} = show(message({
+    body:"<p>GitHub 产出 · example/project</p><p>导出修复已合并。</p><p><a href=\"https://github.com/example/project/pull/8\">查看 PR</a></p>",
+    plainText:"GitHub 产出 · example/project\n导出修复已合并。\n查看 PR",
+  }));
+  expect(screen.getByText("GitHub 产出 · 自动同步")).toBeVisible();
+  expect(screen.getByText("导出修复已合并。")).toBeVisible();
+  expect(screen.queryByRole("link", {name:"查看 PR"})).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name:"详情和链接"}));
+  expect(screen.getByRole("link", {name:"查看 PR"})).toBeVisible();
+});
+
+it("keeps a member's wording and folds long messages in the project workspace", async () => {
+  const lead = "先等业务验收。";
+  const detail = "部署回执需要按环境核对。".repeat(20);
+  const {user} = show(message({body:`<p>${lead}</p><p>${detail}</p>`, plainText:lead+"\n"+detail}), {projectWorkspace:true});
+  expect(screen.getByText(lead)).toBeVisible();
+  expect(screen.queryByText(detail)).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name:"详情和链接"}));
+  expect(screen.getByText(detail)).toBeVisible();
+});
+
 /**
  * Renders one message, opening and closing its editor as the room does, seen by `me`, who's an
  * administrator if `administrator`, in a thread's panel if `thread` says where, and marked as the open
@@ -75,7 +125,7 @@ it("hides standalone generated event IDs while keeping the disclosure and ordina
  */
 function show(
   m: Message | PendingMessage,
-  { me = ada, administrator = false, threaded = false, sent = true, thread = undefined as ThreadPlace | undefined, open = false } = {},
+  { me = ada, administrator = false, threaded = false, sent = true, thread = undefined as ThreadPlace | undefined, open = false, projectWorkspace = false } = {},
 ) {
   const actions = { boost: vi.fn(() => sent), unboost: vi.fn(() => sent), edit: vi.fn(() => sent), remove: vi.fn(() => sent), click: vi.fn(() => Promise.resolve(sent)) };
   let setEditing: (editing: boolean) => void = () => {};
@@ -84,6 +134,7 @@ function show(
   let setRefusals: (update: (refusals: number) => number) => void = () => {};
   const editors = { open: vi.fn(() => setEditing(true)), close: vi.fn(() => setEditing(false)), returnFocus: vi.fn(), attach: vi.fn(), reply: vi.fn() };
   function Room() {
+    const account = useAccount();
     const [editing, set] = useState(false);
     const [shown, setShown] = useState(m);
     const [connections, setConnected] = useState(1);
@@ -93,13 +144,13 @@ function show(
     setConnections = setConnected;
     setRefusals = setRefused;
     return (
-      <FlashProvider workspace>
+      <AccountContext.Provider value={projectWorkspace ? {...account, name:"Project Pulse · 研发协作中心"} : account}><FlashProvider workspace>
         <RoomConnection value={connections}>
           <RefusedUnboosts value={refusals}>
             <MessageItem message={shown} me={{ ...me, administrator }} threaded={threaded} editing={editing} actions={actions} editors={editors} thread={thread} open={open} />
           </RefusedUnboosts>
         </RoomConnection>
-      </FlashProvider>
+      </FlashProvider></AccountContext.Provider>
     );
   }
   const { container } = render(<Room />);

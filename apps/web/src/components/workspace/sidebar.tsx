@@ -193,6 +193,7 @@ export function Sidebar({
       <hgroup className="px-1.5 max-md:pr-10">
         <h2 className="flex min-h-7 items-center gap-2 text-[17px] leading-6 font-[650] wrap-anywhere">{workspaceName}</h2>
         {!grouped && tagline && <p className="text-[13px] leading-[18px] text-muted-foreground wrap-anywhere">{tagline}</p>}
+        {grouped && <p><a href="/onboarding" className="text-xs text-link hover:underline">团队接入</a></p>}
       </hgroup>
 
       <section aria-label="Rooms" className="flex flex-col">

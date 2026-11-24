@@ -17,6 +17,13 @@ export class ProjectFeedbackStore {
     const [row] = await this.db.all<{record: string; feedback_id: string}>("SELECT record, feedback_id FROM project_feedback_events WHERE room_id = ? AND request_id = ?", this.roomId, requestId);
     return row ? {...JSON.parse(row.record), feedbackId: row.feedback_id} : null;
   }
+  async openFollowUp(): Promise<ProjectFeedback | null> {
+    const [row] = await this.db.all<{record: string}>(
+      "SELECT record FROM project_feedback WHERE room_id = ? AND status IN ('submitted', 'adopted', 'in_progress', 'blocked', 'awaiting_acceptance') AND json_extract(record, '$.demo') = 0 ORDER BY CASE WHEN status = 'awaiting_acceptance' THEN 0 WHEN status = 'blocked' THEN 1 ELSE 2 END, updated_at DESC, id DESC LIMIT 1",
+      this.roomId,
+    );
+    return row ? JSON.parse(row.record) : null;
+  }
   async list(before?: string): Promise<Omit<FeedbackPage, "canManage">> {
     const rows = before ? await this.db.all<{record: string}>("SELECT record FROM project_feedback WHERE room_id = ? AND (created_at, id) < (SELECT created_at, id FROM project_feedback WHERE room_id = ? AND id = ?) ORDER BY created_at DESC, id DESC LIMIT 101", this.roomId, this.roomId, before) : await this.db.all<{record: string}>("SELECT record FROM project_feedback WHERE room_id = ? ORDER BY created_at DESC, id DESC LIMIT 101", this.roomId);
     const items = rows.slice(0, 100).map(r => JSON.parse(r.record) as ProjectFeedback);

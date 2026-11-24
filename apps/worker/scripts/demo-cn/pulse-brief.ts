@@ -37,11 +37,11 @@ export async function leadershipBrief(data: PulseSnapshot, roomId: string, cooki
   if (compact) return html`${gapsOnly ? "" : html`<p><strong>做到哪了</strong> ${progressText}${highlights ? "。已完成：" + highlights : ""}。</p>`}
     <p><strong>卡在哪儿</strong> ${needsAttention}${pending ? title(pending.title) : "未见待完成项"}。</p>
     <p><strong>接下来做什么</strong> ${next}</p>
-    <p><a href="${room}">项目总览</a>${sourceLabel ? " · 截至 " + sourceLabel : ""}${record}</p>`.body;
+    <p><a href="${room}?view=overview">项目总览</a>${sourceLabel ? " · 截至 " + sourceLabel : ""}${record}</p>`.body;
   return html`<p><strong>项目速览 · Project Pulse</strong>${sourceLabel ? " · " + sourceLabel : ""}</p>
     ${gapsOnly ? "" : html`<p>把分散在多台电脑上的项目进度和交付记录汇到一个看板。</p>
     <p><strong>做到哪了</strong> ${progressText}${highlights ? "。其中包括" + highlights : ""}。</p>`}
     <p><strong>还差什么</strong> ${needsAttention}${pending ? title(pending.title) : "未看到待完成项"}${record}</p>
     <p><strong>接下来做什么</strong> ${next}</p>
-    <p><a href="${room}">项目总览</a> · <a href="${room}?view=feedback">反馈与落实</a></p>`.body;
+    <p><a href="${room}?view=overview">项目总览</a> · <a href="${room}?view=feedback">反馈与落实</a></p>`.body;
 }

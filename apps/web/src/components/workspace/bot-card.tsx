@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { dateTimeLabel } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { MessageBody, MessageLink, RemoteImage } from "./message-body";
+import { useAccount } from "@/hooks/use-account";
+import { CompactReply } from "./compact-reply";
 import { Marked } from "./search-marks";
 import { PulseDeliveryCard } from "./pulse-delivery-card";
 const isPulseDelivery = (card: Card) => card.parts.some(part => part.kind === "context" && part.items.some(item => "html" in item && /事件编号：PULSE\S+/.test(item.html)));
@@ -141,7 +143,9 @@ function Part({ part, titleId }: { part: CardPart; titleId?: string }) {
 function CardText({ html, folds = false, small = false, className }: { html: string; folds?: boolean; small?: boolean; className?: string }) {
   const nodes = useMemo(() => shownText(html), [html]);
   const [open, setOpen] = useState(false);
+  const compact = useAccount().name === "Project Pulse · 研发协作中心";
   if (nodes === null) return null;
+  if (folds && compact) return <CompactReply nodes={nodes} mentions={[]} className={className}/>;
   const long = folds && isLong(nodes);
   return (
     <div className={className}>

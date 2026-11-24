@@ -1,5 +1,5 @@
-import { isRoomId, type RoomId, type UserId, type PulseSnapshot, type SharedRoom } from "@ember/protocol";
-import { credentialsOf } from "./auth";
+import { isRoomId, type RoomId, type UserId, type PulseSnapshot, type RoomSettings } from "@ember/protocol";
+import { credentialsOf, isHttps } from "./auth";
 import { workspace } from "./workspace";
 import type { Env } from "./env";
 import type { EmberTool, Unlogged } from "./assistant/tool-calls";
@@ -26,9 +26,8 @@ export function pulseBinding(env: Env, roomId: string): {projectId: string; memb
     return value && validId && Array.isArray(value.memberIds) && value.memberIds.every((x: unknown) => typeof x === "string") ? value : null;
   } catch { return null; }
 }
-function teamProjectKey(env: Env, room: Pick<SharedRoom, "kind" | "channelGroup">, key?: string): string | undefined {
-  if (env.PULSE_TEAM_PROJECT_CHANNELS !== "true" || env.PULSE_SOURCE !== "dashboard" ||
-      room.kind !== "closed" || room.channelGroup !== "project") return undefined;
+function teamProjectKey(env: Env, key?: string): string | undefined {
+  if (env.PULSE_TEAM_PROJECT_CHANNELS !== "true" || env.PULSE_SOURCE !== "dashboard") return undefined;
   if (!key) return undefined;
   // Never infer grants for a repository whose channel is explicitly governed.
   try {
@@ -37,11 +36,36 @@ function teamProjectKey(env: Env, room: Pick<SharedRoom, "kind" | "channelGroup"
   } catch {return undefined;}
 }
 
+export async function resolveProjectChannel(env: Env, roomId: RoomId, settings: RoomSettings) {
+  const explicit = pulseBinding(env, roomId);
+  const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true"
+    ? (await workspace(env).teamProjectBindings([roomId]))[roomId] : undefined;
+  const sharedKey = teamProjectKey(env, registered?.repository);
+  const snapshotRoom = settings.room.kind === "closed" || (settings.room.kind === "open" && (explicit?.allRoomMembers === true || sharedKey));
+  const stored = snapshotRoom && (explicit || sharedKey || settings.room.channelGroup === "project")
+    ? await env.CHAT_ROOM.getByName(roomId).projectSnapshot(roomId, explicit?.projectId ?? registered?.repository ?? null)
+    : null;
+  const key = sharedKey ?? stored?.repository;
+  const binding = explicit ?? (key && (settings.room.kind !== "open" || stored) ? {
+    projectId: key, memberIds: settings.people.filter(person => person.member).map(person => person.id),
+  } : null);
+  const allRoomMembers = explicit?.allRoomMembers === true || (!explicit && settings.room.kind === "open" && Boolean(sharedKey));
+  return {explicit, registered, stored, key, binding, allRoomMembers};
+}
+
+function pulseBase(env: Env): URL | null {
+  const base = env.PULSE_URL && URL.canParse(env.PULSE_URL) ? new URL(env.PULSE_URL) : null;
+  if (!base || base.username || base.password) return null;
+  if (base.protocol === "https:" || (base.protocol === "http:" &&
+      (["localhost", "127.0.0.1"].includes(base.hostname) || base.origin === env.PULSE_HTTP_ORIGIN))) return base;
+  return null;
+}
+
 export async function pulseSnapshot(env: Env, projectId: string, days = 7, background?: BackgroundWork, refresh = false, timeout = 8000): Promise<PulseSnapshot> {
   if (!env.PULSE_URL || (env.PULSE_SOURCE !== "dashboard" && !env.PULSE_TOKEN)) throw new Error("Project Pulse 服务未配置");
   if (![1,7,30].includes(days)) throw new Error("无效时间窗");
-  const base = new URL(env.PULSE_URL);
-  if (base.protocol !== "https:" && !(base.protocol === "http:" && (["localhost", "127.0.0.1"].includes(base.hostname) || base.origin === env.PULSE_HTTP_ORIGIN))) throw new Error("Project Pulse 地址不安全");
+  const base = pulseBase(env);
+  if (!base) throw new Error("Project Pulse 地址不安全");
   if (env.PULSE_SOURCE === "dashboard") {
     const url = new URL(`/api/v1/dashboard?days=${days}`, base);
     const saved = demoSnapshot(env, projectId, days, url);
@@ -69,25 +93,20 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   const query = new URL(request.url).searchParams;
   const days = Number(query.get("days") || 7);
   if (![1,7,30].includes(days)) return Response.json({error:"时间窗仅支持 1、7、30 天"},{status:422,headers});
-  const explicit = pulseBinding(env, roomId);
-  const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true" && settings.room.kind === "closed"
-    ? (await workspace(env).teamProjectBindings([roomId]))[roomId] : undefined;
-  const sharedKey = teamProjectKey(env, settings.room, registered?.repository);
-  const snapshotRoom = settings.room.kind === "closed" || (settings.room.kind === "open" && explicit?.allRoomMembers === true);
-  const stored = snapshotRoom && (explicit || settings.room.channelGroup === "project")
-    ? await env.CHAT_ROOM.getByName(roomId).projectSnapshot(roomId, explicit?.projectId ?? registered?.repository ?? null)
-    : null;
+  const {explicit, registered, stored, key, binding, allRoomMembers} = await resolveProjectChannel(env, roomId, settings);
   const local = stored ? projectOverview(stored, days) : null;
-  const key = sharedKey ?? local?.project.key;
-  const binding = explicit ?? (key ? {
-    projectId: key, memberIds: settings.people.filter(person => person.member).map(person => person.id)
-  } : null);
   if (!binding) return Response.json({error:"频道未关联 Project Pulse"},{status:404,headers});
   const user = await workspace(env).authenticate(credentials);
   if (!user || !(explicit?.allRoomMembers === true ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return Response.json({error:"没有项目数据权限"},{status:403,headers});
-  if(query.get("audience")==="room"&&!await workspace(env).canSharePulse(roomId,user.id,binding.memberIds,explicit?.allRoomMembers === true))return Response.json({error:"频道读者未全部获得项目授权"},{status:403,headers});
+  if(query.get("audience")==="room"&&!await workspace(env).canSharePulse(roomId,user.id,binding.memberIds,allRoomMembers))return Response.json({error:"频道读者未全部获得项目授权"},{status:403,headers});
   try {
     let data = local ?? await pulseSnapshot(env,binding.projectId,days,background,query.get("refresh") === "1");
+    const dashboard = env.PULSE_SOURCE === "dashboard" ? pulseBase(env) : null;
+    if (dashboard) {
+      const path = `#/projects/${encodeURIComponent(binding.projectId)}`;
+      data = {...data, monitor_url: env.PULSE_EMBER_DASHBOARD_URL ? env.PULSE_EMBER_DASHBOARD_URL + path
+        : local ? `${dashboard.origin}/` : `${dashboard.origin}/${path}`};
+    }
     if (local && query.get("metrics") === "1" && env.PULSE_URL) {
       const metrics = await pulseSnapshot(env,binding.projectId,days,background,query.get("refresh") === "1", 1200).catch(() => null);
       if (metrics) data = {...data, usage: metrics.usage, members: metrics.members, models: metrics.models,
@@ -107,30 +126,64 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   }
 }
 
+/** The dashboard reads the current Ember project as its signed-in viewer. */
+export async function emberPulseProject(request: Request, env: Env): Promise<Response> {
+  const reply = (body: object, status = 200) => Response.json(body, {status, headers: {"Cache-Control": "private, no-store"}});
+  if (env.EMBER_LAN_TLS_PROXY_KEY && !isHttps(request)) return reply({error:"https_required"}, 403);
+  const repository = new URL(request.url).searchParams.get("repository")?.toLowerCase() ?? "";
+  if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(repository) || repository.length > 100) return reply({error:"invalid_repository"}, 400);
+  const credentials = await credentialsOf(request, env);
+  if (!credentials) return reply({error:"sign_in_required"}, 401);
+  const work = workspace(env);
+  const [user, sidebar] = await Promise.all([work.authenticate(credentials), work.sidebar(credentials)]);
+  if (!user || !sidebar) return reply({error:"sign_in_required"}, 401);
+  const rooms = sidebar.rooms.filter(room => room.kind !== "direct");
+  const bindings = await work.teamProjectBindings(rooms.map(room => room.id));
+  const matching = rooms.filter(room => {
+    const binding = pulseBinding(env, room.id);
+    if (binding) return binding.projectId.toLowerCase() === repository &&
+      (binding.allRoomMembers === true || binding.memberIds.includes(user.id));
+    return teamProjectKey(env, bindings[room.id]?.repository)?.toLowerCase() === repository;
+  });
+  if (matching.length !== 1) return reply({error:"snapshot_not_accessible"}, 404);
+  const room = matching[0]!;
+  const snapshot = await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, repository);
+  const settings = await work.roomSettings(credentials, room.id);
+  if (!snapshot || !settings || settings === "not found" || !settings.people.some(person => person.member && person.id === user.id))
+    return reply({error:"snapshot_not_accessible"}, 404);
+  return reply({repository, source: "Ember", updated_at: snapshot.updatedAt,
+    goal: snapshot.facts.goal, milestones: snapshot.facts.milestones ?? [], progress: snapshot.facts.progress ?? []});
+}
+
 export async function pulseSummaries(request: Request, env: Env, background?: BackgroundWork): Promise<Response> {
   const headers = {"Cache-Control": "no-store"};
   const credentials = await credentialsOf(request, env);
   if (!credentials) return Response.json({error: "未登录"}, {status: 401, headers});
   const [user, sidebar] = await Promise.all([workspace(env).authenticate(credentials), workspace(env).sidebar(credentials)]);
   if (!user || !sidebar) return Response.json({error: "未登录"}, {status: 401, headers});
-  const teamKeys = env.PULSE_TEAM_PROJECT_CHANNELS === "true"
-    ? await workspace(env).teamProjectBindings(sidebar.rooms.filter(room => room.kind === "closed" && room.channelGroup === "project").map(room => room.id))
-    : {};
-  const rooms = sidebar.rooms.flatMap(room => {
-    if (room.kind === "direct") return [];
+  // The sidebar lists the viewer's own rooms, including registered open project channels.
+  const sharedRooms = sidebar.rooms.filter(room => room.kind !== "direct");
+  const teamKeys = await workspace(env).teamProjectBindings(sharedRooms.map(room => room.id));
+  const rooms = sharedRooms.flatMap(room => {
     const binding = pulseBinding(env, room.id);
-    const projectId = binding ? (binding.allRoomMembers === true || binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]?.repository);
-    return projectId ? [{room, projectId, snapshotRoom: room.kind === "closed" || binding?.allRoomMembers === true}] : [];
+    const registered = teamKeys[room.id];
+    const projectId = binding ? (binding.allRoomMembers === true || binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, registered?.repository);
+    const legacyProject = !binding && !registered && room.kind === "closed" && room.channelGroup === "project";
+    if (!projectId && !legacyProject) return [];
+    const snapshotRoom = room.kind === "closed" || !binding || binding.allRoomMembers === true;
+    const canUsePulse = Boolean(binding) || room.kind === "closed";
+    return [{room, projectId, snapshotRoom, canUsePulse}];
   });
-  const results = await Promise.all(rooms.map(async ({room, projectId, snapshotRoom}) => {
+  const results = await Promise.all(rooms.map(async ({room, projectId, snapshotRoom, canUsePulse}) => {
     try {
-      const local = snapshotRoom && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId);
-      const data = local ? projectOverview(local, 7) : await pulseSnapshot(env, projectId, 7, background);
+      const local = snapshotRoom && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId ?? null);
+      const data = local ? projectOverview(local, 7) : projectId && canUsePulse ? await pulseSnapshot(env, projectId, 7, background) : null;
+      if (!data) return null;
       return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness};
     }
     catch { return {roomId: room.id, name: room.name, progress: null}; }
   }));
-  return Response.json({projects: results}, {headers});
+  return Response.json({projects: results.filter(project => project !== null)}, {headers});
 }
 
 export function projectTools(env: Env, roomId: RoomId, askerId: UserId): (Omit<EmberTool, "run"> & {run(input: Record<string, unknown>): Promise<Unlogged>})[] {

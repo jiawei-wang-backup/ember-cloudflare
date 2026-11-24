@@ -13,6 +13,7 @@ export type StoredProject = ProjectUpdate & {
   repository: string;
   updatedAt: string;
   reporter: {id: string; name: string};
+  submittedBy?: string;
 };
 
 const statuses = ["on_track", "blocked", "completed", "paused", "unknown"];
@@ -72,11 +73,16 @@ export function parseProjectUpdate(value: unknown, repository: string): ProjectU
 export function projectUpdateText(project: StoredProject) {
   const {goal, status, progress, milestones, pulls} = project.facts;
   const statusLabels: Record<string, string> = {on_track: "进行中", blocked: "受阻", completed: "已完成", paused: "已暂停", unknown: "待确认"};
+  const notes = (progress ?? []).slice(0, 4).map(line => line.slice(0, 300));
+  const lead = notes[0] ?? (milestones?.length
+    ? `已完成 ${milestones.filter(item => item.state === "completed").length}/${milestones.length} 项里程碑。`
+    : status ? `项目目前${statusLabels[status]}。` : "项目资料已更新。");
   return [
     `项目进展 · ${project.repository}`,
+    lead,
     status && `状态 · ${statusLabels[status]}`,
     goal && `目标 · ${goal.slice(0, 200)}`,
-    ...((progress ?? []).slice(0, 4).map(line => line.slice(0, 300))),
+    ...notes.slice(1),
     ...((milestones ?? []).slice(0, 6).map(item => `${item.state === "completed" ? "已完成" : "待完成"} · ${item.title}`)),
     ...((pulls ?? []).slice(0, 3).map(pull => `PR #${pull.number} · ${pull.title}`)),
   ].filter(Boolean).join("\n\n");

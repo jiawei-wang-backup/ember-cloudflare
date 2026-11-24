@@ -163,6 +163,10 @@ export function MessageLink({ href, ...props }: ComponentProps<"a">) {
   if (href === undefined) return <a {...props} />;
   const url = urlOf(href);
   if (url?.origin !== location.origin) return <a href={href} target="_blank" rel="noopener" {...props} />;
+  // Project assistant replies made before the overview had an explicit address used the room link.
+  if (props.children === "项目总览" && !url.search && !url.hash && /^\/rooms\/[a-z0-9]{16}$/.test(url.pathname)) {
+    url.searchParams.set("view", "overview");
+  }
   return isAppPage(url.pathname) ? <PageLink href={url.pathname + url.search + url.hash} {...props} /> : <a href={href} {...props} />;
 }
 

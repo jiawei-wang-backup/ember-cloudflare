@@ -1,0 +1,10 @@
+请帮我接入团队 Ember。通用 r28 ZIP 从 https://192.168.16.70:5443/onboarding 下载。我会用 Codex 打开解压目录，请先确认当前操作系统和目录，自动选择启动入口。Windows 用 CMD 运行 ember-setup.cmd，macOS 和 Linux 运行 sh ember-setup.sh。入口会运行预检。后续 Python 命令按本机可用入口执行，Windows 可用 py -3，macOS 和 Linux 用 python3。如果发现我在旧接入目录，先保留原授权、项目选择、游标和待发批次，再更新脚本。
+
+1. 核对团队。运行 python pulse-onboard.py preflight。输出必须确认团队工作区。使用本人账号在团队 HTTPS 页面登录并运行 python ember-connect.py connect --project-channels 完成授权。若已有授权，运行 python pulse-onboard.py preflight --member "本人在 Ember 的显示名" 核对身份和权限。遇到证书、工作区或账号不匹配，在上报前停下并回报。
+2. 确认项目。只读列出本机候选仓库、中文名和可用的主会话数，等我明确选择后按 project-selection.md 保存项目范围。已接入的设备保留原授权、项目选择、频道绑定和 .pulse-pending。运行 python pulse-onboard.py bind-channels，按完整仓库名复用现有频道，只有服务端确认没有匹配才创建私有频道。遇到冲突或权限不足就报告。
+3. 试报。按包内 PROMPT.txt 先写可用情况、最近交付、当前卡点和下一步，保留已有未过时记录，证据放后面。把摘要给本人确认，再运行 prepare-ember 和 sync-ember。检查回执是否已在 Ember 总览读回。将 verify_url 发给另一位有该频道权限的成员，请对方核对总览并确认。再次运行 preflight，确认该项目显示 peer_confirmed。Pulse 的会话和 Token 单独同步及核验，Pulse 不可用时继续更新 Ember。
+4. 长期运行。前面核验通过后，用 python pulse-onboard.py start-listener 启动本机代答，仅监听本人当前绑定的项目。已用旧监听的设备先停旧进程再启动。请另一位成员在已绑定频道用 @ 验证实际回复。把原有每 30 分钟上报改成在一条固定 Codex 会话内执行包内 PROMPT.txt，保留原频率，只启用一个定时任务。新任务生效后才停用旧独立任务，保留历史会话和待发批次。
+
+回报工作区和账号、各项目频道、试报读回和同事确认、实际 @ 结果、定时任务绑定会话，以及采用 Pulse 时的单独回执。预检尚待登录或等待同事确认时如实标注。不要在对话中提交凭据。
+
+中途失败时，把原命令、失败字段和错误交给 Codex 诊断。先修可安全处理的问题，再重试原命令。文件缺失或校验失败，从同一团队接入页重新解压通用 ZIP，保留当前目录的私有授权与续传状态。账号或工作区不匹配，回到本人浏览器授权并重跑预检。网络超时或暂时不可用，沿用原 work_dir、回执和游标重试；持续失败就报告具体阻塞。Pulse 失败时继续做 Ember。不要关闭 TLS 校验、重置游标、删除待发批次或另建重复频道。

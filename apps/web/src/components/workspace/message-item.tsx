@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { AgentBadge, isAgent } from "./agent-badge";
 import { Attachment } from "./attachment";
 import { BotCards } from "./bot-card";
+import { CompactReply } from "./compact-reply";
 import { HuddleShown, HuddleSummary, HuddleTile, HuddleTitle, isLive } from "./huddle-message";
 import { MessageActionsMenu, type MessageActionsHandle } from "./message-actions-menu";
 import { MessageBody } from "./message-body";
@@ -236,6 +237,12 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
   // though it looks for an avatar address that mentions don't have, so it never does.
   const mentioned = message.mentions.some((person) => person.id === me.id);
   const shown = useMemo(() => shownBody(message.body, message.plainText), [message.body, message.plainText]);
+  const listedAuthor = useContext(PeopleContext).get(message.creator.id);
+  const snapshot = /^project-snapshot-[a-f0-9]{32}$/.test(message.clientMessageId);
+  const delivery = /^GitHub 产出 · [\w.-]+\/[\w.-]+\s*\n/.test(message.plainText);
+  const automated = listedAuthor?.role === "bot" || isAgent(listedAuthor ?? message.creator) || Boolean(message.cards) ||
+    /^member-codex-[a-z0-9]{16}$/.test(message.clientMessageId) || message.plainText.startsWith("本机 Codex 代答｜");
+  const ReplyBody = coloured || automated || snapshot || delivery ? CompactReply : MessageBody;
   // Quote quotes what the message shows, or the plain text of a bot's cards where they're all it shows.
   const quoted = useMemo(
     () => (message.body === "" && message.cards ? cardsQuote(message.plainText) : (shown ?? [])),
@@ -363,8 +370,10 @@ export const MessageItem = memo(function MessageItem({ message, me, threaded: fo
                 <div className={threaded ? "col-start-1 row-start-1 min-w-0" : "touch:pr-8"}>
                   <PulseSummaryCard nodes={shown} mentions={message.mentions} trailing={(threaded && edited) || undefined}/>
                 </div> :
-              coloured && message.plainText.startsWith("【已采纳的项目建议】") && shown ? <div className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}><ProjectAdoptionCard nodes={shown} mentions={message.mentions}/></div> : message.creator.name === "项目助手" && message.plainText.startsWith("【结构化查询模式，非 LLM 分析】") && shown ? <PulseReply nodes={shown} text={message.plainText} mentions={message.mentions} trailing={(threaded && edited) || undefined} className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}/> : <MessageBody
+              coloured && message.plainText.startsWith("【已采纳的项目建议】") && shown ? <div className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}><ProjectAdoptionCard nodes={shown} mentions={message.mentions}/></div> : message.creator.name === "项目助手" && message.plainText.startsWith("【结构化查询模式，非 LLM 分析】") && shown ? <PulseReply nodes={shown} text={message.plainText} mentions={message.mentions} trailing={(threaded && edited) || undefined} className={threaded ? "col-start-1 row-start-1" : "touch:pr-8"}/> : <ReplyBody
                 nodes={shown}
+                {...(snapshot && {snapshot:true})}
+                {...(delivery && {delivery:true})}
                 mentions={message.mentions}
                 compactCardQuotes={coloured}
                 emoji={allEmoji}

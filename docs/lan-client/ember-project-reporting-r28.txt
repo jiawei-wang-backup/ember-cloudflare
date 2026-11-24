@@ -1,0 +1,31 @@
+在同一条固定 Codex 会话中，每 30 分钟同步已确认的 Ember 项目。使用当前接入目录里的脚本和私有 .pulse-project-selection.json。自动运行期间只处理已选仓库和已授权会话。复用现有频道、定时任务和待发批次，保留历史会话及采集游标。 macOS 或 Linux 如果只提供 python3，以下命令中的 python 都用 python3。
+
+先执行 `python pulse-onboard.py sync-ember` 续传已有队列。只有确认有新事实才准备新快照。事实依据来自已授权的项目会话、Git、GitHub 和交付回执。对照 Ember 当前总览，保留仍有效的内容，修正明确过时的条目。缺回执就标待核实。可用情况要写明环境和验证范围，合并、测试、POC、正式部署和业务验收各自独立记录。只上报频道成员可看的脱敏资料。工作区或本人账号有疑问时先运行 preflight 核对。
+
+执行 `python pulse-onboard.py prepare-ember`。在返回的 work_dir 内写入 UTF-8 的 ember-projects.json，格式如下。示例仅用于说明字段，不要作为事实上传。
+
+[
+  {
+    "repository": "owner/repo",
+    "goal": "这个项目帮助谁解决什么问题",
+    "status": "unknown",
+    "progress": [
+      "可用情况：写清已验证可用的功能和环境；未知则写待确认。",
+      "最近交付：一句话说明最近交付和核实到的阶段。",
+      "当前卡点：写清最影响交付且还缺的证据或依赖。",
+      "下一步：写明由谁做什么。",
+      "试用入口：https://example.com/trial",
+      "详细记录与依据 https://example.com/evidence"
+    ],
+    "milestones": [{"title":"正式环境验收","state":"pending","evidence":"实际验收回执待补","due_on":null}],
+    "pulls": [{"number":"42","title":"已核实的变更","url":"https://github.com/owner/repo/pull/42","state":"merged","updated_at":"2026-11-24T07:30:00.000Z"}]
+  }
+]
+
+progress 的前四项用示例里的标签，每项一两句话。只有已核实、频道成员可以试用的入口才填「试用入口：」加一个 URL。PR、发布单、验收链接放后面；Ember 总览会折叠详细记录。repository 必填，其余字段可省略。省略的字段会保留，列表字段只在有足够资料时提交当前完整列表。progress 最多 8 项，每项及 goal 最多 600 字，milestones 最多 24 项，pulls 最多 30 项。项目状态用 on_track、blocked、completed、paused 或 unknown；里程碑用 pending 或 completed，PR 用 open、merged 或 closed。读到证据不足时，保留历史记录并明确待核实的内容。
+
+执行 `python pulse-onboard.py sync-ember --work-dir "<work_dir>"`，核对 ember_posts 的 readback_status 和 Ember 项目总览。首次试报把 verify_url 交给另一位有权限的成员核验，确认后用 preflight 检查 peer_confirmed。published、unchanged 或 superseded 分别表示已发布、已处理或已有更新的版本。失败或待重试时保留原工作目录和内容。没有新事实且没有待重试项时结束本轮，不发送重复通知。
+
+若本机也配置了 Pulse，独立运行 `python pulse-onboard.py prepare` 和 `python pulse-onboard.py sync-pulse --work-dir "<Pulse work_dir>"`，检查 report 和 usage_verified。能从本机确认当前固定上报会话的 UUID 时，在 prepare 加 `--exclude-session-id "<UUID>"`，避免把上报任务自己的输出采进去。保留原批次与游标，失败按原工作目录重试。Pulse 暂时不可用时，继续完成 Ember。
+
+出现异常时，交给 Codex 判断是客户端文件、依赖、网络、授权还是服务端问题。修复后重跑失败的那一步。超时先查回执或读回，再用原批次重试。连续失败就报告具体阻塞，保留已成功的部分。定时运行期间不要另建任务、另开会话、清理历史、改动监听范围或补发手工消息。

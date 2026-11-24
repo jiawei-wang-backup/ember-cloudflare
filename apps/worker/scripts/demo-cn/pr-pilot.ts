@@ -6,6 +6,7 @@ import {promisify} from "node:util";
 import type {RoomId, RoomSettings} from "@ember/protocol";
 import {botSlackPath, type Bots} from "@ember/protocol/bots";
 import {verifiedDemoEmber, signIn, state} from "./local.ts";
+import {deliveryPayload, deliverySummary} from "./delivery-summary.ts";
 
 export const pilotRepo = "jiawei-wang-dev/project-pulse";
 export const companyPilotRepo = "JUXON-AI/VideoHighlightCut";
@@ -92,22 +93,15 @@ export async function syncPilotPRs({verify = false, company = false} = {}) {
   let sent = 0;
 
   async function publish(pr: Pull, verification = false) {
-    if (company) await checkRoom();
     const {kind, at, revision} = eventOf(pr);
     const delivery = createHash("sha256").update(`${repo.toLowerCase()}#${pr.number}:${verification ? "verify:" : ""}${revision}`).digest("hex");
     const label = verification ? "GitHub PR 联调" : "GitHub PR 同步";
-    const status = (kind === "open" && pr.draft ? "open · 草稿" : kind);
-    const title = `PR #${pr.number} · ${pr.title.slice(0, 110)}`;
-    const payload = {text: `${label} · ${title}`, blocks: [
-      {type: "header", text: {type: "plain_text", text: `【${label}】${title}`}},
-      {type: "section", fields: [
-        {type: "mrkdwn", text: `*项目*\n${roomName}`},
-        {type: "mrkdwn", text: `*记录状态*\n${status}`},
-        {type: "mrkdwn", text: `*来源时间*\n${at}`},
-      ]},
-      {type: "section", text: {type: "mrkdwn", text: `作者：${escape(pr.user.login)}\n来源仓库：${repo}\n${pr.html_url}`}},
-      {type: "context", elements: [{type: "plain_text", text: `${verification ? "现有 PR，测试推送和去重。 " : ""}事件编号：PULSEPR${delivery}`}]},
-    ]};
+    const status = kind === "merged" ? "已合并" : kind === "closed" ? "已关闭" : pr.draft ? "已开草稿" : "已提交，待合并";
+    const summary = await deliverySummary([`${status}：${pr.title}`], `这项代码改动${status}：${pr.title.replace(/https?:\/\/\S+|www\.\S+/gi, "").slice(0, 75)}`);
+    if (company) await checkRoom();
+    const details = [label, `项目：${roomName}`, `PR #${pr.number} · ${pr.title.slice(0, 170)}`,
+      `状态：${status}`, `来源时间：${at}`, `作者：${pr.user.login}`, `来源仓库：${repo}`, pr.html_url];
+    const payload = deliveryPayload(summary, details.map(escape).join("\n"), delivery);
     const response = await fetch(new URL(botSlackPath(roomId!, bot!.key), ember.origin), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(15_000),
       headers: {"Content-Type": "application/json", "X-Ember-Delivery-Id": delivery},

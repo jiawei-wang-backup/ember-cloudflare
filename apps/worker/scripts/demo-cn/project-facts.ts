@@ -10,7 +10,7 @@ export function factsReply(data: PulseSnapshot, roomId: string, question: string
   const report = data.latest_report;
   const observed = report && typeof report === "object" && "observed_at" in report && typeof report.observed_at === "string" ? report.observed_at : "";
   const date = Number.isFinite(Date.parse(observed)) ? new Date(observed).toLocaleDateString("zh-CN", {timeZone: "Australia/Melbourne"}) : "";
-  const source = html`<p><a href="${href}">项目总览</a>${date ? " · 阶段上报于 " + date : ""}${data.freshness?.status === "snapshot" ? " · 上次同步记录" : ""}</p>`;
+  const source = html`<p><a href="${href}?view=overview">项目总览</a>${date ? " · 阶段上报于 " + date : ""}${data.freshness?.status === "snapshot" ? " · 上次同步记录" : ""}</p>`;
   const previousQuestion = context.split("\n").findLast(line => line.startsWith("问："))?.slice(2) ?? "";
   const purpose = data.project.goal || data.business?.outcome;
   if (about.test(question) || (correction.test(question) && about.test(previousQuestion))) {

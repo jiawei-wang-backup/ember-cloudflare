@@ -12,9 +12,12 @@ const shortName = (name: string) => name.replace(/\s*[·•]\s*[a-f\d]{8,}$/i, "
 const pullStates: Record<string, string> = {open: "待处理", merged: "已合并", closed: "已关闭"};
 
 function monitorProjectUrl(data: PulseSnapshot) {
-  const value = data.metrics_source ?? data.source;
+  const value = data.monitor_url ?? data.metrics_source ?? data.source;
   const source = URL.canParse(value) ? new URL(value) : null;
-  if (!source || !["http:", "https:"].includes(source.protocol) || source.pathname !== "/api/v1/dashboard" || source.username || source.password) return null;
+  if (!source || !["http:", "https:"].includes(source.protocol) || source.username || source.password) return null;
+  if (data.monitor_url) return ["/", "/project-pulse/"].includes(source.pathname) &&
+    (!source.hash || source.hash.startsWith("#/projects/")) ? source.href : null;
+  if (source.pathname !== "/api/v1/dashboard") return null;
   return source.origin + "/#/projects/" + encodeURIComponent(data.project.full_name);
 }
 

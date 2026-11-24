@@ -20,6 +20,7 @@ export interface ProjectFeedback {
 }
 export interface FeedbackEvent {id: string; requestId: string; action: FeedbackAction | "submit"; actor: User; from: FeedbackStatus | null; to: FeedbackStatus; note: string; evidence: FeedbackEvidence[]; at: string}
 export interface FeedbackPage {items: ProjectFeedback[]; hasMore: boolean; before: string | null; counts: Record<FeedbackStatus, number>; canManage: boolean}
+export interface ProjectFollowUp {item: ProjectFeedback | null; snapshot: string | null}
 export interface NewFeedback {requestId: string; title: string; description: string; moduleId: string; milestoneId: string | null; sourceMessageIds: string[]; demo: boolean}
 export interface ChangeFeedback {requestId: string; version: number; action: FeedbackAction; note: string; moduleId?: string; milestoneId?: string | null; assigneeId?: string | null; dueOn?: string | null; criteria?: string; evidence?: FeedbackEvidence[]}
 const id = (v: unknown): v is string => typeof v === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(v);

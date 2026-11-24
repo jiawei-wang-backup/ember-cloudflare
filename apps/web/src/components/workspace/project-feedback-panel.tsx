@@ -27,7 +27,7 @@ const nextStep: Record<FeedbackStatus, string> = {
   rejected: "",
 };
 const actions: Record<FeedbackAction, string> = {adopt: "采纳并明确落实", assign: "调整执行安排", start: "开始落实", block: "记录卡点", deliver: "提交产出并申请验收", accept: "确认验收通过", reopen: "退回继续落实", reject: "暂不采纳", comment: "补充信息"};
-export interface FeedbackDraft {moduleId: string; milestoneId?: string}
+export interface FeedbackDraft {moduleId: string; milestoneId?: string; snapshotFollowUp?: string}
 interface Props {roomId: string; data: PulseSnapshot; me: Me; draft?: FeedbackDraft | null; onDraftHandled: () => void; focusId?: string | null}
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {...init, credentials: "same-origin"});
@@ -46,6 +46,7 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
   const [active, setActive] = useState<string | null>(null);
   const [detail, setDetail] = useState<{item: ProjectFeedback; events: FeedbackEvent[]; sources?: Array<{id: string; path: string | null}>} | null>(null);
   const [createOpen, setCreateOpen] = useState(false), [title, setTitle] = useState(""), [description, setDescription] = useState("");
+  const [snapshotFollowUp, setSnapshotFollowUp] = useState<string | undefined>();
   const [moduleId, setModuleId] = useState(data.business?.modules[0]?.id || ""), [milestoneId, setMilestoneId] = useState("");
   const [operation, setOperation] = useState<FeedbackAction | null>(null), [note, setNote] = useState("");
   const [assigneeId, setAssigneeId] = useState(""), [dueOn, setDueOn] = useState(""), [criteria, setCriteria] = useState("");
@@ -69,7 +70,10 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
   }, [active, base, revision]);
   useEffect(() => {
     if (!draft) return;
-    setModuleId(draft.moduleId); setMilestoneId(draft.milestoneId || ""); setTitle(""); setDescription(""); setCreateOpen(true); request.current = null; onDraftHandled();
+    setModuleId(draft.moduleId); setMilestoneId(draft.milestoneId || "");
+    setSnapshotFollowUp(draft.snapshotFollowUp);
+    setTitle(draft.snapshotFollowUp?.slice(0, 160) ?? ""); setDescription(draft.snapshotFollowUp ?? "");
+    setCreateOpen(true); request.current = null; onDraftHandled();
   }, [draft, onDraftHandled]);
   const change = () => {request.current = null; setError("");};
   const module = data.business?.modules.find(m => m.id === moduleId);
@@ -81,8 +85,8 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
   const create = async () => {
     setSaving(true); setError(""); request.current ??= clientId();
     try {
-      const result = await json<{item: ProjectFeedback}>(base, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({requestId: request.current, title, description, moduleId, milestoneId: milestoneId || null, sourceMessageIds: [], demo: false})});
-      setCreateOpen(false); setTitle(""); setDescription(""); setRevision(n => n + 1); setActive(result.item.id); request.current = null; setNotice("已提交，待评估");
+      const result = await json<{item: ProjectFeedback}>(base, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({requestId: request.current, title, description, moduleId, milestoneId: milestoneId || null, sourceMessageIds: [], demo: false, snapshotFollowUp})});
+      setCreateOpen(false); setTitle(""); setDescription(""); setSnapshotFollowUp(undefined); setRevision(n => n + 1); setDetail(null); setActive(result.item.id); request.current = null; setNotice(`已打开跟进事项 · ${feedbackStatuses[result.item.status]}`);
     } catch (cause) {setError(cause instanceof Error ? cause.message : "反馈提交失败");} finally {setSaving(false);}
   };
   const update = async () => {
@@ -109,12 +113,12 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
       "comment",
     ];
   };
-  const moduleFields = <div className="grid gap-3 sm:grid-cols-2"><label className="flex flex-col gap-1 text-xs">业务模块<select aria-label="反馈业务模块" className={field} value={moduleId} onChange={e => {setModuleId(e.target.value); setMilestoneId(""); change();}}>{data.business?.modules.filter(m => m.id !== "other").map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label className="flex flex-col gap-1 text-xs">关联里程碑<select aria-label="反馈关联里程碑" className={field} value={milestoneId} onChange={e => {setMilestoneId(e.target.value); change();}}><option value="">整个模块</option><optgroup label="业务交付闭环">{data.business?.journeys?.filter(j => j.moduleIds.includes(moduleId)).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</optgroup><optgroup label="模块阶段">{module?.milestones.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}</optgroup></select></label></div>;
+  const moduleFields = <div className="grid gap-3 sm:grid-cols-2"><label className="flex flex-col gap-1 text-xs">业务模块<select aria-label="反馈业务模块" className={field} value={moduleId} onChange={e => {setModuleId(e.target.value); setMilestoneId(""); change();}}>{data.business?.modules.filter(m => m.id !== "other").map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label className="flex flex-col gap-1 text-xs">关联里程碑<select aria-label="反馈关联里程碑" className={field} value={milestoneId} onChange={e => {setMilestoneId(e.target.value); change();}}><option value="">整个模块</option><optgroup label="业务交付闭环">{data.business?.journeys?.filter(j => j.moduleIds.includes(moduleId)).map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</optgroup><optgroup label="模块阶段">{(moduleId === "reported" ? [] : module?.milestones ?? []).map(m => <option key={m.id} value={m.id}>{m.title}</option>)}</optgroup></select></label></div>;
   const visibleItems = page?.items.filter(item => !filter || filter.statuses.includes(item.status))
     .sort((a, b) => feedbackPriority[a.status] - feedbackPriority[b.status]) ?? [];
   return <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 max-md:px-3 max-md:py-3" aria-label="反馈与落实工作台">
     <div className="mx-auto max-w-3xl space-y-4">
-      <header className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">反馈与落实</h2></div><div className="flex gap-2"><button className={button} onClick={() => setRevision(n => n + 1)}>刷新</button><button className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground" onClick={() => {setCreateOpen(true); setModuleId(data.business?.modules[0]?.id || ""); setMilestoneId(""); setTitle(""); setDescription(""); change();}}>提出反馈</button></div></header>
+      <header className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">反馈与落实</h2></div><div className="flex gap-2"><button className={button} onClick={() => setRevision(n => n + 1)}>刷新</button><button className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground" onClick={() => {setCreateOpen(true); setModuleId(data.business?.modules[0]?.id || ""); setMilestoneId(""); setTitle(""); setDescription(""); setSnapshotFollowUp(undefined); change();}}>提出反馈</button></div></header>
 
       <div role="group" aria-label="按状态筛选" className="flex flex-wrap gap-2">
         {statusGroups.map(group => <button key={group.label} className={`rounded-md px-2.5 py-1.5 text-xs hover:bg-hover ${filter === group ? "bg-hover font-semibold" : "text-message-muted"}`} aria-pressed={filter === group} onClick={() => setFilter(current => current === group ? null : group)}>{group.label}</button>)}
@@ -136,7 +140,7 @@ export function ProjectFeedbackPanel({roomId, data, me, draft, onDraftHandled, f
       <div className="flex flex-wrap items-center gap-2"><FeedbackBadge item={detail.item}/><span className="text-[11px] text-muted-foreground">提出人：{detail.item.createdBy.name} · {new Date(detail.item.createdAt).toLocaleString("zh-CN")}</span></div>
       <p className="text-xs text-message-muted">{data.business?.modules.find(m => m.id === detail.item.moduleId)?.name} · {data.business?.journeys?.find(j => j.id === detail.item.milestoneId)?.title || data.business?.modules.flatMap(m => m.milestones).find(m => m.id === detail.item.milestoneId)?.title || "整个模块"}</p>
       <p className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed">{detail.item.description}</p>
-      <details><summary className="cursor-pointer text-sm font-medium">执行安排</summary><div className="mt-2 grid gap-2 text-sm text-message-muted"><div>执行人：{detail.item.assignee?.name || "待安排"}</div><div>约定日期：{detail.item.dueOn || "未约定"}</div><div className="whitespace-pre-wrap">验收条件：{detail.item.criteria || "待明确"}</div></div></details>
+      <div className="grid gap-2 rounded-md border bg-surface p-3 text-sm text-message-muted"><div>执行人：{detail.item.assignee?.name || "待安排"}</div><div>约定日期：{detail.item.dueOn || "未约定"}</div><div className="whitespace-pre-wrap">验收条件：{detail.item.criteria || "待明确"}</div></div>
       <div className="space-y-1 text-xs">{detail.item.sourceMessageIds.map((id, index) => {const source = detail.sources?.find(s => s.id === id); return source?.path ? <PageLink key={id} className="mr-3 text-link underline" href={source.path}>原始讨论 {index + 1}</PageLink> : <span key={id} className="mr-3 text-muted-foreground">原始讨论 {index + 1} 已不可用</span>;})}{detail.item.proposalMessageId && <PageLink className="text-link underline" href={`/rooms/${roomId}/@${detail.item.proposalMessageId}`}>采纳方案</PageLink>}</div>
       {detail.item.evidence.length > 0 && <div><h3 className="mb-1 text-xs font-semibold">交付依据</h3>{detail.item.evidence.map((e, i) => <a key={i} className="mr-3 block break-all text-xs text-link underline" href={e.url} target="_blank" rel="noreferrer">{e.label}</a>)}</div>}
       <div className="flex flex-wrap gap-2">{allowed(detail.item).map(action => <button key={action} className={button} onClick={() => begin(action)}>{actions[action]}</button>)}</div>

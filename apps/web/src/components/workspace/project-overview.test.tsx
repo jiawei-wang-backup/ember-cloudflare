@@ -1,7 +1,30 @@
 import {act,render,screen,waitFor,fireEvent} from "@testing-library/react";
 import {afterEach,it,expect,vi} from "vitest";
 import {ProjectOverview} from "./project-overview";
+import {ProjectQuickLook} from "./project-quick-look";
+import type {PulseSnapshot} from "@ember/protocol";
 afterEach(()=>vi.unstubAllGlobals());
+it("uses reported availability and hides supporting links in the overview details",()=>{
+  const milestone = {title:"测试流水线通过", state:"completed", due_on:null};
+  const at = "2026-11-24T05:49:13.438Z";
+  const data: PulseSnapshot = {
+    ember_snapshot:true, project:{key:"juxon-ai/wzwx-score", full_name:"juxon-ai/wzwx-score", repository_id:null, status:"unknown", goal:"核对赛事结果", owner:null},
+    milestones:[milestone], milestone_progress:null, members:[], models:[], pulls:[],
+    activities:["可用情况：只有 POC 已验证。", "最近交付：已完成导入测试。", "试用入口：https://example.com/trial", "发布记录 https://example.com/evidence"]
+      .map(title => ({title, display_name:"负责人", summary:null, last_activity_at:at})),
+    window:{days:7, since:at, until:at}, source:"Ember", fetched_at:at,
+    usage:{input_tokens:null, cached_input_tokens:null, output_tokens:null, events:null, updated_at:null},
+    latest_report:null, observation:null, cost:{amount:null,label:"待确认"}, quota:{scope:"project",status:"unknown",reason:"待确认"}, caveats:[],
+  };
+  render(<ProjectQuickLook data={data} onDiscussion={()=>{}}/>);
+  expect(screen.getByText("只有 POC 已验证。")).toBeVisible();
+  expect(screen.queryByText(milestone.title)).not.toBeInTheDocument();
+  expect(screen.getByRole("link",{name:/打开试用入口/})).toHaveAttribute("href","https://example.com/trial");
+  const evidence=screen.getByText(/发布记录/);
+  expect(evidence).not.toBeVisible();
+  fireEvent.click(screen.getByText("详细记录"));
+  expect(evidence).toBeVisible();
+});
 it("never inserts a temporary header while checking an unbound room",async()=>{
   let answer!:(value:Response)=>void;
   vi.stubGlobal("fetch",vi.fn(()=>new Promise<Response>(resolve=>{answer=resolve;})));
@@ -107,4 +130,19 @@ it("keeps the compact statistics button for a bound project without business det
   expect(await screen.findByRole("link", {name: /监控面板/})).toBeVisible();
   fireEvent.click(screen.getByRole("button", {name: "项目统计"}));
   expect(screen.getByRole("dialog", {name: "项目统计与原始依据"})).toBeVisible();
+});
+
+it("shows the monitor link for Ember snapshots before requesting Pulse metrics", async () => {
+  const monitor = "http://192.168.16.70:4185/";
+  const fetch = vi.fn().mockResolvedValue(Response.json({
+    ember_snapshot: true, monitor_url: monitor, source: "Ember 项目快照",
+    project: {full_name: "example/monashmate", owner: null},
+    usage: {input_tokens: null, output_tokens: null},
+    members: [], models: [], activities: [], milestones: [], pulls: [],
+    window: {days: 7}, cost: {label: "费用未知"}, quota: {reason: "未知"}, caveats: [],
+  }));
+  vi.stubGlobal("fetch", fetch);
+  render(<ProjectOverview roomId="monashmate" compact/>);
+  expect(await screen.findByRole("link", {name: /监控面板/})).toHaveAttribute("href", monitor);
+  expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/rooms/monashmate/project?days=7", expect.anything());
 });

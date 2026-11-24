@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -72,12 +73,16 @@ class OnboardingTest(unittest.TestCase):
         room = {"id": "existing", "kind": "closed"}
         connector = Mock(ORIGIN="https://ember.example")
 
+        published = {}
         def response(tool, arguments):
             if tool == "list_rooms":
                 return {"rooms": [room]}
             if tool == "find_project_channel":
                 return {"status": "matched", "room": room}
+            if tool == "read_project_snapshot":
+                return {"snapshot":{"revision":published["revision"], "peer_confirmed":False}}
             update = json.loads(arguments["update_json"])
+            published.update(update)
             return {"status": "published", "revision": update["revision"]}
 
         with patch.object(onboard, "load_connector", return_value=connector), patch.object(onboard, "collector") as collector:
@@ -97,6 +102,7 @@ class OnboardingTest(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertEqual(restored["ember_posts"][0]["revision"], revision)
             self.assertEqual(restored["ember_posts"][0]["status"], "published")
+            self.assertEqual(restored["ember_posts"][0]["readback_status"], "verified")
             self.assertEqual(self.run_command("sync-ember")[1]["ember_posts"], [])
             collector.assert_not_called()
 
@@ -110,6 +116,30 @@ class OnboardingTest(unittest.TestCase):
                     result = onboard.bind_project_channels()
                 self.assertEqual(connector.call_tool.call_count, 3 if state == "missing" else 2)
                 self.assertEqual(result[0]["status"], "resolved" if state == "missing" else "pending")
+
+    def test_wrong_workspace_stops_before_channel_lookup(self):
+        connector = Mock(ORIGIN="https://ember.example")
+        connector.check_workspace.side_effect = ValueError("工作区不一致")
+        with patch.object(onboard, "load_connector", return_value=connector):
+            status, result = self.run_command("bind-channels")
+        self.assertEqual(status, 2)
+        self.assertIn("工作区不一致", result["ember_binding_error"])
+        connector.call_tool.assert_not_called()
+
+    def test_detects_corrupt_package_before_network_access(self):
+        files = ["ember-workspace.json", "Ember-LAN-CA.pem", "pulse-onboard.py", "ember-connect.py", "ember-member-listener.py"]
+        for name in files:
+            (self.package / name).write_bytes(b"fixture")
+        digest = hashlib.sha256(b"fixture").hexdigest()
+        (self.package / "SHA256SUMS").write_text("".join(f"{digest}  {name}\n" for name in files))
+        self.assertEqual(onboard.verify_package(), len(files))
+        (self.package / "Ember-LAN-CA.pem").write_bytes(b"corrupt")
+        connector = Mock(ORIGIN="https://ember.example")
+        with patch.object(onboard, "load_connector", return_value=connector):
+            status, result = self.run_command("preflight")
+        self.assertEqual(status, 1)
+        self.assertIn("Ember-LAN-CA.pem", result["error"])
+        connector.check_workspace.assert_not_called()
 
 
 if __name__ == "__main__":

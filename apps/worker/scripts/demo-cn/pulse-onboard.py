@@ -2,6 +2,7 @@
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import os
 import json
 import importlib.util
@@ -11,11 +12,13 @@ import shutil
 import subprocess
 import time
 import sys
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import ProxyHandler, build_opener, urlopen
 import uuid
 
 PULSE = "http://192.168.16.70:4185"
-EMBER = "http://192.168.16.70:5174"
+EMBER = "https://192.168.16.70:5443"
 PACKAGE = Path(__file__).resolve().parent
 PENDING = PACKAGE / ".pulse-pending"
 PAIRED_SCOPE = "uploaded-sessions"
@@ -66,9 +69,18 @@ def collector(action, work, sources, excluded=None, label=None, github_login=Non
             for flag, value in (("--exclude-session-id", excluded), ("--label", label), ("--github-login", github_login)):
                 if value:
                     command += [flag, value]
-    raw = subprocess.check_output(command, cwd=PACKAGE, encoding="utf-8-sig",
+    try:
+        response = subprocess.run(command, cwd=PACKAGE, encoding="utf-8-sig", errors="replace", capture_output=True,
+                                  timeout=300 if action in ("Prepare","Submit") else 35,
                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return json.loads(raw)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"Pulse {action} 执行超时，保留原批次后重试") from exc
+    if response.returncode:
+        raise ValueError(f"Pulse {action} 执行失败（退出码 {response.returncode}），请检查采集依赖及 Pulse 连通性")
+    try:
+        return json.loads(response.stdout)
+    except ValueError as exc:
+        raise ValueError(f"Pulse {action} 返回无效回执，请核对客户端和服务端版本") from exc
 
 
 def load_connector():
@@ -78,13 +90,101 @@ def load_connector():
     return connector
 
 
+def verify_package():
+    entries = {}
+    manifest = PACKAGE / "SHA256SUMS"
+    if not manifest.is_file():
+        raise ValueError("缺少包内 SHA256SUMS，请重新解压完整客户端")
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        digest, sep, name = line.partition("  ")
+        if (not sep or not re.fullmatch(r"[a-f0-9]{64}", digest) or not name or name.startswith(".")
+                or any(c in name for c in "/\\:") or name in entries):
+            raise ValueError("包内校验清单格式错误，请重新下载客户端")
+        entries[name] = digest
+    required = {"ember-workspace.json", "Ember-LAN-CA.pem", "pulse-onboard.py", "ember-connect.py", "ember-member-listener.py"}
+    if not required <= entries.keys():
+        raise ValueError("包内校验清单不完整，请重新下载客户端")
+    failed = [name for name, digest in entries.items()
+              if not (PACKAGE / name).is_file() or hashlib.sha256((PACKAGE / name).read_bytes()).hexdigest() != digest]
+    if failed:
+        raise ValueError("客户端文件缺失或损坏，请重新解压：" + "、".join(failed))
+    return len(entries)
+
+
+def inspect_pulse():
+    opener = build_opener(ProxyHandler({}))
+    try:
+        with opener.open(PULSE + "/api/v1/report-inventory", timeout=5) as response:
+            return {"status":"reachable", "http":response.status}
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            return {"status":"authorization_required", "http":exc.code}
+        return {"status":"unsupported" if exc.code == 404 else "unavailable", "http":exc.code}
+    except OSError:
+        return {"status":"unavailable"}
+
+
+def onboarding_preflight(result, connector, expected_member):
+    team = connector.check_workspace()
+    result["workspace"] = {key:team.get(key) for key in ("workspace", "workspace_id", "installed_release", "client_release", "platform")}
+    if not connector.CREDENTIALS.is_file():
+        result["next"] = "login"
+        return
+    member = connector.call_tool("get_onboarding_identity", {})
+    if member.get("workspace_id") != team["workspace_id"]:
+        raise ValueError("当前授权连接的团队工作区与接入包不一致")
+    result["member"] = member["member"]
+    if expected_member and expected_member not in (member["member"]["name"], member["member"]["id"]):
+        raise ValueError("授权账号与预期不符，请用本人账号重新授权")
+    result["missing_scopes"] = sorted({"read", "write", "private", "create_project_channels"} - set(member["scopes"]))
+    if result["missing_scopes"]:
+        result["next"] = "authorize_projects"
+        return
+    selection = PACKAGE / ".pulse-project-selection.json"
+    if not selection.is_file():
+        result["next"] = "confirm_projects"
+        return
+    approved_sources()
+    result["channels"] = []
+    for project in json.loads(selection.read_text(encoding="utf-8-sig"))["projects"]:
+        key = project.get("repository")
+        if not key:
+            continue
+        row = {"project":key}
+        result["channels"].append(row)
+        try:
+            match = connector.call_tool("find_project_channel", {"repository":key})
+            row["status"] = match["status"]
+            if match["status"] != "matched":
+                continue
+            room = match["room"]["id"]
+            row["room_id"] = room
+            row["channel"] = f"{EMBER}/rooms/{room}?view=overview"
+            snapshot = connector.call_tool("read_project_snapshot", {"room_id":room})["snapshot"]
+            if snapshot and snapshot.get("revision"):
+                row["updated_at"] = snapshot["updatedAt"]
+                row["peer_confirmed"] = snapshot["peer_confirmed"]
+                row["verify_url"] = f"{EMBER}/onboarding?" + urlencode({"room":room,"revision":snapshot["revision"]})
+        except (ValueError, OSError, KeyError, StopIteration) as exc:
+            row.update(status="pending", error=str(exc))
+    rows = result["channels"]
+    if not rows or any(row["status"] != "matched" or not row.get("verify_url") for row in rows):
+        result["next"] = "bind_and_report"
+    elif not all(row.get("peer_confirmed") for row in rows):
+        result["next"] = "verify_report"
+    else:
+        result["next"] = "start_listener_and_schedule"
+
+
 def bind_reporting_member(result):
     selection = json.loads((PACKAGE / ".pulse-project-selection.json").read_text(encoding="utf-8-sig"))
     if selection.get("ember_paired") != PAIRED_SCOPE:
         return
     try:
         proof = collector("DeviceProof", None, [])
-        result["ember_reporting_member"] = load_connector().call_tool("bind_pulse_device", proof)
+        connector = load_connector()
+        connector.check_workspace()
+        result["ember_reporting_member"] = connector.call_tool("bind_pulse_device", proof)
     except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
         result["ember_reporting_member"] = {"status": "pending", "error": str(exc)}
 
@@ -99,6 +199,7 @@ def resolve_project_channels():
     path = PACKAGE / ".pulse-project-selection.json"
     selection = json.loads(path.read_text(encoding="utf-8-sig"))
     connector = load_connector()
+    connector.check_workspace()
     results = []
     paired = selection.get("ember_paired") == PAIRED_SCOPE
     projects = [project for project in selection["projects"] if project.get("ember_publish") is not False or (paired and project.get("ember_room_id"))]
@@ -292,6 +393,15 @@ def publish_progress(channels):
                 state["receipts"][repo] = receipt
                 write_state(path, state)
                 result.update(receipt)
+                if receipt["status"] != "superseded":
+                    try:
+                        snapshot = connector.call_tool("read_project_snapshot", {"room_id":room})["snapshot"]
+                        if not snapshot or snapshot["revision"] != update["revision"]:
+                            raise ValueError("上报版本已更新，请从 preflight 核对当前快照")
+                        result.update(readback_status="verified", peer_confirmed=snapshot["peer_confirmed"],
+                                      verify_url=f"{EMBER}/onboarding?" + urlencode({"room":room,"revision":snapshot["revision"]}))
+                    except (ValueError, OSError, KeyError, StopIteration) as exc:
+                        result.update(readback_status="pending", readback_error=str(exc))
             except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
                 result.update(status="pending", error=str(exc))
                 blocked.add(repo)
@@ -329,6 +439,7 @@ def start_listener():
     if status.returncode:
         raise ValueError("本机 Codex CLI 尚未登录，请登录后重试")
     connector = load_connector()
+    connector.check_workspace()
     response = connector.mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, "2025-06-18")
     tools = {tool["name"] for tool in (response or {}).get("result", {}).get("tools", [])}
     if not {"read_room", "send_message"} <= tools:
@@ -357,7 +468,7 @@ def check_listener(result):
         result["ember_member_listener_error"] = str(exc)
 
 
-def retry_ember(result, *, listener=False):
+def retry_ember(result):
     try:
         result["channels"] = bind_project_channels()
     except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
@@ -368,31 +479,39 @@ def retry_ember(result, *, listener=False):
             (PENDING / "ember-context-revision").touch()
     except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
         result["ember_error"] = str(exc)
-    if listener:
-        check_listener(result)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["links", "preflight", "verify-projects", "bind-channels", "bind-pulse-device", "sync-ember", "start-listener", "prepare", "prepare-ember", "submit", "sync-pulse"])
+    parser.add_argument("action", choices=["links", "check-package", "preflight", "verify-projects", "bind-channels", "bind-pulse-device", "sync-ember", "start-listener", "prepare", "prepare-ember", "submit", "sync-pulse"])
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--exclude-session-id", type=lambda value: str(uuid.UUID(value)))
     parser.add_argument("--label")
     parser.add_argument("--github-login")
+    parser.add_argument("--member", help="用 preflight 核对预期的 Ember 显示名或账号 ID")
     args = parser.parse_args()
-    result = {"ember": EMBER, "ember_oauth": load_connector().ORIGIN, "project_pulse": PULSE}
+    connector = load_connector()
+    result = {"ember": EMBER, "ember_oauth": connector.ORIGIN, "project_pulse": PULSE, "onboarding": EMBER + "/onboarding"}
     try:
-        if args.action == "preflight":
+        if args.action == "check-package":
+            result["package_files_verified"] = verify_package()
+        elif args.action == "preflight":
+            result["package_files_verified"] = verify_package()
             result["codex_cli"] = bool(shutil.which("codex"))
             result["github_cli"] = bool(shutil.which("gh"))
-            if sys.platform == "win32":
-                collector("DeviceProof", None, [])
-            else:
-                perl = shutil.which("perl")
-                if not perl or not shutil.which("curl"):
-                    raise OSError("缺少 Perl 或 curl")
-                subprocess.run([perl, "-MJSON::PP", "-MDigest::SHA", "-e", "1"], check=True, timeout=10)
-            result["collector_ready"] = True
+            onboarding_preflight(result, connector, args.member)
+            result["pulse"] = inspect_pulse()
+            try:
+                if sys.platform == "win32":
+                    collector("DeviceProof", None, [])
+                else:
+                    perl = shutil.which("perl")
+                    if not perl or not shutil.which("curl"):
+                        raise OSError("缺少 Perl 或 curl")
+                    subprocess.run([perl, "-MJSON::PP", "-MDigest::SHA", "-e", "1"], check=True, timeout=10)
+                result["collector_ready"] = True
+            except (ValueError, OSError, subprocess.SubprocessError):
+                result["collector_ready"] = False
         elif args.action == "verify-projects":
             result["projects"] = verify_projects()
         elif args.action == "start-listener":
@@ -424,7 +543,7 @@ def main():
                                 stage_progress(work)
                         except (ValueError, OSError, KeyError, TypeError) as exc:
                             result["ember_stage_error"] = str(exc)
-                    retry_ember(result, listener=args.action == "bind-channels")
+                    retry_ember(result)
                 if args.action in ("submit", "sync-pulse"):
                     try:
                         result["report"] = submit_pulse(work, sources)
@@ -434,6 +553,9 @@ def main():
                     bind_reporting_member(result)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
         result["error"] = str(exc)
+        if isinstance(exc, HTTPError) and args.action == "preflight":
+            result["error"] = ("请重新用本人账号授权 Ember" if exc.code in (401, 403) else
+                               "无法确认团队 Ember 工作区，请核对接入地址和客户端版本")
     binding = result.get("ember_reporting_member", {})
     listener = result.get("ember_member_listener")
     if args.action in ("bind-channels", "bind-pulse-device", "sync-ember", "submit", "sync-pulse", "start-listener"):
@@ -450,8 +572,15 @@ def main():
             incomplete.append("ember_reporting_member")
         if "ember_error" in result or any("error" in item for item in result.get("ember_posts", [])):
             incomplete.append("ember_posts")
+        if any(item.get("readback_status") == "pending" for item in result.get("ember_posts", [])):
+            incomplete.append("ember_readback")
         if incomplete:
             result["incomplete"] = incomplete
+    if "error" in result or result.get("incomplete") or result.get("collector_ready") is False:
+        result["recovery"] = {
+            "report_to_codex":"提供命令、失败字段和错误信息。不要复制密码、Token 或 OAuth 文件。",
+            "retry":"修复指明的问题后重跑原命令。已准备的批次沿用原 work_dir，保留游标和回执。",
+        }
     print(json.dumps(result, ensure_ascii=True))
     return 1 if "error" in result else 2 if result.get("incomplete") else 0
 

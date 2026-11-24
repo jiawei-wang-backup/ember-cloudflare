@@ -6,9 +6,12 @@ import {promisify} from "node:util";
 import {botSlackPath, type Bots} from "@ember/protocol/bots";
 import type {RoomId, RoomSettings} from "@ember/protocol";
 import {verifiedDemoEmber, signIn, state} from "./local.ts";
+import {deliveryPayload, deliverySummary} from "./delivery-summary.ts";
 
 const run = promisify(execFile);
 export const deliveryContexts = new Map<string, {repository: string; text: string}>();
+const lastDelivery = new Map<RoomId, string>();
+const escape = (line: string) => line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 interface PrivateRepoGrant {
   roomId: string;
@@ -44,7 +47,14 @@ async function repositoryOutput(repo: string, includeDocuments: boolean, token?:
     ...releases.map((r: {tag_name: string; html_url: string}) => "发布 " + r.tag_name + " " + r.html_url),
     ...pulls.map((r: {number: number; title: string; state: string; html_url: string}) => "PR #" + r.number + " " + r.state + " " + r.title + " " + r.html_url),
   ];
-  return {changes, files};
+  const latestCommit = revision[0].commit.message.split("\n")[0];
+  const facts = [
+    "最新提交：" + latestCommit,
+    ...releases.map((r: {tag_name: string}) => "GitHub 发布记录：" + r.tag_name),
+    ...pulls.map((r: {title: string; state: string; merged_at?: string; draft?: boolean}) =>
+      (r.merged_at ? "已合并" : r.draft ? "草稿" : r.state === "open" ? "待合并" : "已关闭") + "：" + r.title),
+  ];
+  return {changes, files, latestCommit, facts};
 }
 
 export async function syncGithubDeliveries() {
@@ -93,14 +103,25 @@ export async function syncGithubDeliveries() {
       if (!await permitted()) { deliveryContexts.delete(roomId); continue; }
       const text = ["GitHub 产出 · " + repo, ...output.changes, ...output.files.slice(0,3).map(f => f.file + " " + f.url)].join("\n");
       const delivery = createHash("sha256").update(roomId + "\n" + text).digest("hex");
-      const response = await fetch(new URL(botSlackPath(roomId,bot.key),ember.origin), {
-        method:"POST", redirect:"error", headers:{"Content-Type":"application/json","X-Ember-Delivery-Id":delivery},
-        body:JSON.stringify({text}), signal:AbortSignal.timeout(10000),
-      });
-      if (!response.ok || (await response.text()).trim() !== "ok") throw new Error("Delivery failed");
+      if (lastDelivery.get(roomId) !== delivery) {
+        const title = output.latestCommit.replace(/https?:\/\/\S+|www\.\S+/gi, "").trim().slice(0, 75);
+        const fallback = title ? `GitHub 有新记录，最新提交是「${title}」。` : "GitHub 有新记录，可以展开查看提交和发布详情。";
+        const summary = await deliverySummary(output.facts, fallback);
+        if (!await permitted()) { deliveryContexts.delete(roomId); continue; }
+        const details = text.split("\n").map(line => {
+          const linkAt = line.lastIndexOf(" https://github.com/");
+          return linkAt < 0 ? escape(line.slice(0, 200)) : escape(line.slice(0, linkAt).slice(0, 200) + line.slice(linkAt));
+        }).join("\n");
+        const response = await fetch(new URL(botSlackPath(roomId,bot.key),ember.origin), {
+          method:"POST", redirect:"error", headers:{"Content-Type":"application/json","X-Ember-Delivery-Id":delivery},
+          body:JSON.stringify(deliveryPayload(summary, details, delivery)), signal:AbortSignal.timeout(10000),
+        });
+        if (!response.ok || (await response.text()).trim() !== "ok") throw new Error("Delivery failed");
+        lastDelivery.set(roomId, delivery);
+        console.log("GitHub 产出已同步",repo,output.files.length);
+      }
       if (publicRepo) deliveryContexts.set(roomId,{repository:repo,text:JSON.stringify(output)});
       else deliveryContexts.delete(roomId);
-      console.log("GitHub 产出已同步",repo,output.files.length);
     } catch { deliveryContexts.delete(roomId); console.error("GitHub 产出同步失败",roomId); }
   }
 }

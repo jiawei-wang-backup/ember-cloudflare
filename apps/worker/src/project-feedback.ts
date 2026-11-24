@@ -1,7 +1,7 @@
 import {isRoomId, parseNewFeedback, parseChangeFeedback, threadPath} from "@ember/protocol";
 import {credentialsOf} from "./auth";
 import {workspace} from "./workspace";
-import {pulseBinding} from "./pulse";
+import {resolveProjectChannel} from "./pulse";
 import {businessDefinition, businessJourneys} from "./pulse-business";
 import type {Env} from "./env";
 
@@ -15,10 +15,11 @@ export async function projectFeedbackRoute(request: Request, env: Env, roomId: s
   const [user, settings] = await Promise.all([workspace(env).authenticate(credentials), workspace(env).roomSettings(credentials, roomId)]);
   if (!user) return problem(401, "未登录");
   if (!settings || settings === "not found") return problem(404, "项目不可访问");
-  const binding = pulseBinding(env, roomId);
-  if (!binding || !(binding.allRoomMembers === true ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return problem(403, "没有项目权限");
+  const {binding, allRoomMembers, registered, explicit} = await resolveProjectChannel(env, roomId, settings);
+  if (!binding || !(allRoomMembers ? settings.people.some(p => p.member && p.id === user.id) : binding.memberIds.includes(user.id))) return problem(403, "没有项目权限");
   const definition = businessDefinition(binding.projectId);
-  if (!definition) return problem(404, "此项目未开启业务协作");
+  const ownerId = explicit?.ownerId ?? (registered?.repository === binding.projectId.toLowerCase() ? registered.ownerId : undefined);
+  const canManage = settings.canAdminister || (ownerId === user.id && settings.people.some(p => p.member && p.id === user.id));
   const room = env.CHAT_ROOM.getByName(roomId);
   if (request.method === "GET") {
     if (feedbackId) {
@@ -26,31 +27,40 @@ export async function projectFeedbackRoute(request: Request, env: Env, roomId: s
       if (!result.item) return problem(404, "反馈不存在");
       const messages = result.item.sourceMessageIds.length ? await room.messagesWithIds(roomId, result.item.sourceMessageIds) : [];
       const sources = result.item.sourceMessageIds.map(id => {const message = messages.find(m => m.id === id); return {id, path: message && !message.deleted ? message.parentId ? threadPath(roomId, message.parentId, id) : `/rooms/${roomId}/@${id}` : null};});
-      return Response.json({...result, sources, canManage: settings.canAdminister}, {headers});
+      return Response.json({...result, sources, canManage}, {headers});
     }
-    const before = new URL(request.url).searchParams.get("before") || undefined;
+    const params = new URL(request.url).searchParams;
+    if (params.get("followUp") === "1") return Response.json(await room.projectDiscussionFollowUp(roomId, binding.projectId), {headers});
+    const before = params.get("before") || undefined;
     if (before && !/^[a-zA-Z0-9_-]{1,80}$/.test(before)) return problem(422, "分页位置无效");
-    return Response.json({...await room.projectFeedback(roomId, before), canManage: settings.canAdminister}, {headers});
+    return Response.json({...await room.projectFeedback(roomId, before), canManage}, {headers});
   }
-  if (!await workspace(env).canSharePulse(roomId, user.id, binding.memberIds, binding.allRoomMembers === true)) return problem(403, "项目读者授权已变化，暂不能公开反馈内容");
+  if (!await workspace(env).canSharePulse(roomId, user.id, binding.memberIds, allRoomMembers)) return problem(403, "项目读者授权已变化，暂不能公开反馈内容");
   let body: unknown;
   try {body = await request.json();} catch {return problem(422, "请求格式无效");}
   const validModule = (moduleId: string, milestoneId?: string | null) => {
+    if (!definition) return moduleId === "reported" && !milestoneId;
     const module = definition.modules.find(m => m.id === moduleId);
     return module && (!milestoneId || module.stages.some((_, index) => `${module.id}-${index}` === milestoneId) || businessJourneys(binding.projectId).some(j => j.id === milestoneId && j.moduleIds.includes(moduleId)));
   };
   if (request.method === "POST" && !feedbackId) {
     const input = parseNewFeedback(body);
-    if (!input || !validModule(input.moduleId, input.milestoneId)) return problem(422, "请填写反馈内容并选择本项目的业务模块");
+    if (!input || input.requestId.startsWith("followup-") || !validModule(input.moduleId, input.milestoneId)) return problem(422, "请填写反馈内容并选择本项目的业务模块");
     if (input.sourceMessageIds.length) {
       const sources = await room.messagesWithIds(roomId, input.sourceMessageIds);
       if (sources.length !== input.sourceMessageIds.length || sources.some(m => m.deleted)) return problem(409, "引用讨论已删除或不属于此项目");
+    }
+    const snapshot = (body as {snapshotFollowUp?: unknown}).snapshotFollowUp;
+    if (snapshot !== undefined) {
+      if (typeof snapshot !== "string" || !snapshot.trim() || snapshot.length > 600) return problem(422, "待跟进内容无效");
+      const item = await room.trackProjectSnapshotFollowUp(roomId, binding.projectId, snapshot, input, user, authorizedAt);
+      return item ? Response.json({item}, {status: 201, headers}) : problem(409, "项目下一步或频道权限已变化，请回到讨论重新打开。");
     }
     return Response.json({item: await room.createProjectFeedback(roomId, input, user, false, null, authorizedAt)}, {status: 201, headers});
   }
   if (request.method === "PATCH" && feedbackId) {
     const input = parseChangeFeedback(body);
-    if (!input) return problem(422, "请填写操作说明及有效的更新信息");
+    if (!input || input.requestId.startsWith("followup-")) return problem(422, "请填写操作说明及有效的更新信息");
     for (const evidence of input.evidence ?? []) {
       if (evidence.url.startsWith("http://")) {
         const link = new URL(evidence.url), origin = new URL(request.url).origin;
@@ -67,7 +77,7 @@ export async function projectFeedbackRoute(request: Request, env: Env, roomId: s
       const directory = await workspace(env).directory(credentials);
       if (input.assigneeId && (!assignee || directory?.find(p => p.id === input.assigneeId)?.role === "bot")) return problem(422, "请选择本项目的一位实际频道成员作为执行人");
     }
-    const result = await room.changeProjectFeedback(roomId, feedbackId, input, user, settings.canAdminister, assignee, authorizedAt);
+    const result = await room.changeProjectFeedback(roomId, feedbackId, input, user, canManage, assignee, authorizedAt);
     return "error" in result && result.error ? problem(result.status ?? 500, result.error) : Response.json(result, {headers});
   }
   return problem(405, "不支持的操作");

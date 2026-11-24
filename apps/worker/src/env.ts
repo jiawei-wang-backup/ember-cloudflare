@@ -15,6 +15,7 @@ export interface Env {
   PULSE_SOURCE?: "dashboard";
   /** Explicit operator opt-in for a LAN HTTP source, including its port. Never supplied by a client. */
   PULSE_HTTP_ORIGIN?: string;
+  PULSE_EMBER_DASHBOARD_URL?: string;
   /** Room ID -> repository UUID or canonical project key, with explicitly authorized Ember users. */
   PULSE_ROOMS?: string;
   PULSE_MENTION_PRIORITY?: string;
@@ -180,6 +181,8 @@ export interface Env {
    */
   DISABLE_SSL?: string;
   EMBER_LAN_TLS_PROXY_KEY?: string;
+  EMBER_LAN_WORKSPACE_ID?: string;
+  EMBER_LAN_CLIENT_RELEASE?: string;
 }
 
 /** Whether people may sign in with just a name, and guests who did may stay signed in. */

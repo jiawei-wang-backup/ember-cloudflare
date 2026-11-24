@@ -278,7 +278,10 @@ const READ_PROJECT_SNAPSHOT: Tool = {
     if (typeof match === "string" || match.id !== room.id ||
         !await work.canSharePulse(room.id, access.userId, binding?.memberIds ?? [], !binding || binding.allRoomMembers === true))
       throw new Refused(NO_ROOM);
-    return {snapshot: {repository: stored.repository, updatedAt: stored.updatedAt, facts: stored.facts}};
+    const receipt = env.EMBER_LAN_WORKSPACE_ID
+      ? await env.CHAT_ROOM.getByName(room.id).onboardingReceipt(room.id, stored.revision, access.userId) : null;
+    return {snapshot: {repository: stored.repository, updatedAt: stored.updatedAt, facts: stored.facts,
+      ...(receipt && {revision:stored.revision, peer_confirmed:receipt.peer_confirmed})}};
   },
 };
 
@@ -286,9 +289,10 @@ const SYNC_PROJECT_SNAPSHOT: Tool = {
   name: "sync_project_snapshot",
   title: "Sync an Ember project snapshot",
   description: "Stores validated project facts and publishes progress once in the given authorized project channel.",
-  takes: {room_id: ROOM_ID, repository: {type: "string", description: "Confirmed GitHub repository, owner/name."}, update_json: {type: "string", description: "JSON with revision, observedAt and facts."}},
+  takes: {room_id: ROOM_ID, repository: {type: "string", description: "Confirmed GitHub repository, owner/name."}, update_json: {type: "string", description: "JSON with revision, observedAt and facts."},
+    announce: {type: "boolean", description: "Set false to update the project overview without publishing a new channel message. Defaults to true."}},
   required: ["room_id", "repository", "update_json"],
-  async run(env, access, {room_id, repository, update_json}) {
+  async run(env, access, {room_id, repository, update_json, announce}) {
     const key = projectRepository(repository);
     if (typeof update_json !== "string" || update_json.length > 50_000) throw new Refused("Invalid project snapshot.");
     let value: unknown;
@@ -304,13 +308,27 @@ const SYNC_PROJECT_SNAPSHOT: Tool = {
       throw new Refused("Project facts need permission for the channel's readers.");
     const sender = await work.outsideSender(access, room.id);
     if (sender === "limited") throw new Refused(SENDING_TOO_FAST);
-    const receipt = sender && await env.CHAT_ROOM.getByName(room.id).syncProjectSnapshot(room.id, key, update, sender);
+    const receipt = sender && await env.CHAT_ROOM.getByName(room.id).syncProjectSnapshot(room.id, key, update, sender, announce !== false);
     if (!receipt) throw new Refused(NO_ROOM);
     return receipt;
   },
 };
 
 /** The tools a connection allowed to read has. */
+const ONBOARDING_IDENTITY: Tool = {
+  name: "get_onboarding_identity",
+  title: "Check the connected Ember workspace and member",
+  description: "Returns the current member and the deployment identity without changing any project data.",
+  takes: {}, required: [],
+  async run(env, access) {
+    const work = workspace(env);
+    const [account, [member]] = await Promise.all([work.account(), work.directoryEntries([access.userId])]);
+    if (!account || !member) throw new Refused("Workspace or member unavailable.");
+    return {workspace_id:env.EMBER_LAN_WORKSPACE_ID, workspace:account.name, client_release:env.EMBER_LAN_CLIENT_RELEASE,
+      member:{id:member.id, name:member.name}, scopes:access.scopes};
+  },
+};
+
 const READING: Tool[] = [
   {
     name: "list_rooms",
@@ -420,8 +438,9 @@ export function registerTools(server: McpServer, env: Env, access: OutsideAccess
     const available = tools === SENDING
       ? [...tools, ...(projectAccess ? [SYNC_PROJECT_SNAPSHOT] : []),
         ...(env.PULSE_TEAM_PROJECT_CHANNELS === "true" ? [CODEX_THINKING, ...(env.PULSE_DEVICE_BIND_TOKEN && access.scopes.includes("create_project_channels") ? [BIND_PULSE_DEVICE] : [])] : [])]
-      : tools === READING && access.scopes.includes("private")
-        ? [...tools, FIND_PROJECT_CHANNEL, ...(projectAccess ? [READ_PROJECT_SNAPSHOT] : [])] : tools;
+      : tools === READING
+        ? [...tools, ...(env.EMBER_LAN_WORKSPACE_ID ? [ONBOARDING_IDENTITY] : []),
+            ...(access.scopes.includes("private") ? [FIND_PROJECT_CHANNEL] : []), ...(projectAccess ? [READ_PROJECT_SNAPSHOT] : [])] : tools;
     for (const { name, title, description, takes, required, run } of available) {
       const inputSchema = fromJsonSchema({ type: "object" as const, properties: takes, required, additionalProperties: false });
       server.registerTool(name, { title, description, inputSchema, annotations }, (given) => answered(run(env, access, given as Record<string, unknown>)));

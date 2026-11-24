@@ -23,7 +23,7 @@ function MilestonePipeline({stages, roomId, onFeedback}: {
     <ol aria-label="里程碑流水线" className="flex overflow-x-auto px-1 py-2">
       {stages.map((item, index) => {
         const done = milestoneDone(item);
-        const status = item.state === "accepted" ? "已验收" : done ? "已做完" : item.state === "blocked" ? "卡住了" : "还没完成";
+        const status = item.state === "accepted" ? "已验收" : done ? "阶段已记录" : item.state === "blocked" ? "卡住了" : "待确认";
         return <li key={index} className="relative min-w-28 flex-1">
           {index < stages.length - 1 && <span aria-hidden="true" className={cn("absolute top-[19px] left-1/2 h-px w-full", done ? "bg-positive/50" : "bg-border")}/>}
           <button type="button" aria-expanded={selected === index} aria-controls={selected === index ? detailId : undefined} onClick={() => setSelected(current => current === index ? null : index)} className={cn("relative flex h-full w-full flex-col items-center gap-2 rounded-md px-2 pb-1 text-center text-xs focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", selected === index && "bg-hover/50")}>
@@ -74,7 +74,7 @@ function BusinessModuleTile({module, onFeedback}: {
           <h3 className="font-medium">还差什么</h3>
           <ul className="mt-1 list-inside list-disc space-y-1 text-message-muted">{module.blockers.map(title => <li key={title}>{title.replace(/^尚待验证：/, "")}</li>)}</ul>
         </div>}
-        <MilestonePipeline stages={module.milestones} onFeedback={index => {
+        <MilestonePipeline stages={module.milestones} onFeedback={module.id === "reported" ? undefined : index => {
           const milestone = module.milestones[index];
           if (milestone) onFeedback(module.id, milestone.id);
         }}/>
@@ -119,7 +119,7 @@ export function ProjectBusiness({roomId, data, onFeedback, onDiscussion}: {
       <section id="project-milestones" className="rounded-xl border bg-card p-4" aria-label="项目里程碑进度">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-semibold">项目里程碑进度</h2>
-          {progress && progress.total > 0 && <span className="text-sm tabular-nums text-message-muted">已做完 {completed}/{progress.total}{completed < progress.total && ` · 还差 ${progress.total - completed} 项`}</span>}
+          {progress && progress.total > 0 && <span className="text-sm tabular-nums text-message-muted">{progress.basis === "reported" ? "阶段记录完成" : "里程碑验收"} {completed}/{progress.total}{completed < progress.total && ` · ${progress.total - completed} 项待确认`}</span>}
         </div>
         <MilestonePipeline roomId={roomId} stages={projectStages}/>
       </section>
@@ -131,7 +131,7 @@ export function ProjectBusiness({roomId, data, onFeedback, onDiscussion}: {
         {data.introduction?.pains.length ? <details className="mt-3 text-xs"><summary className="cursor-pointer text-message-muted">当前痛点与预期价值</summary><ul className="mt-2 list-inside list-disc space-y-1 text-message-muted">{data.introduction.pains.map(p => <li key={p}>{p}</li>)}</ul><p className="mt-2 leading-relaxed">{data.introduction.value}</p></details> : null}
       </section>
       {blockers.length > 0 && <section className="rounded-xl border bg-card p-4">
-        <h2 className="text-sm font-semibold">当前卡点</h2>
+        <h2 className="text-sm font-semibold">待补记录</h2>
         <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-message-muted">
           {blockers.slice(0, 3).map((blocker, index) => <li key={index}><strong className="text-message-ink">{blocker.module}：</strong>{blocker.title}</li>)}
         </ul>

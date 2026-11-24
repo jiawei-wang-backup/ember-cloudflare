@@ -660,7 +660,21 @@ export class ChatRoom extends DurableObject<Env> {
     });
   }
 
-  async syncProjectSnapshot(roomId: RoomId, repository: string, update: ProjectUpdate, {user, tags, authorizedAt}: OutsideSender) {
+  async onboardingReceipt(roomId: RoomId, revision: string, viewerId: string, confirm = false) {
+    return this.serially(async () => {
+      const current = await this.storedProject(roomId);
+      if (!current || current.revision !== revision || await this.isDeleted()) return null;
+      const mayConfirm = (current.submittedBy ?? current.reporter.id) !== viewerId;
+      const key = "onboarding-confirmation:" + roomId;
+      const confirmed = await this.ctx.storage.get<string>(key) === revision;
+      if (confirm && mayConfirm && !confirmed) await this.ctx.storage.put(key, revision);
+      return {repository:current.repository, revision, updated_at:current.updatedAt,
+        summary:current.facts.progress?.[0] ?? current.facts.goal ?? "",
+        can_confirm:mayConfirm, peer_confirmed:confirmed || (confirm && mayConfirm)};
+    });
+  }
+
+  async syncProjectSnapshot(roomId: RoomId, repository: string, update: ProjectUpdate, {user, tags, authorizedAt}: OutsideSender, announce = true) {
     return this.serially(async () => {
       if (await this.isDeleted() || await this.revocationsFor(roomId).refuse(tags, authorizedAt)) return null;
       const db = this.projectSnapshotDb();
@@ -678,14 +692,15 @@ export class ChatRoom extends DurableObject<Env> {
         const unchanged = previous && Object.keys(facts).every(key =>
           JSON.stringify(facts[key as keyof typeof facts]) === JSON.stringify(previous.facts[key as keyof typeof facts]));
         const current = unchanged
-          ? {...previous, revision: update.revision, observedAt: update.observedAt}
+          ? {...previous, revision: update.revision, observedAt: update.observedAt, submittedBy:user.id}
           : {...update, repository, facts, reporter: {id: user.id, name: user.name}, updatedAt: new Date().toISOString()};
         const record = JSON.stringify(current);
         await db.batch([
           statement("INSERT INTO ember_project_snapshots (room_id, record) VALUES (?, ?) ON CONFLICT(room_id) DO UPDATE SET record = excluded.record", roomId, record),
-          ...(!unchanged ? [statement("INSERT INTO ember_project_announcements (room_id, revision, record) VALUES (?, ?, ?)", roomId, update.revision, record)] : []),
+          ...(!unchanged && announce ? [statement("INSERT INTO ember_project_announcements (room_id, revision, record) VALUES (?, ?, ?)", roomId, update.revision, record)] : []),
         ]);
         if (unchanged) return {status: "unchanged", revision: update.revision};
+        if (!announce) return {status: "saved", revision: update.revision};
         announcement = current;
       }
       const store = this.storeFor(roomId);
@@ -705,10 +720,43 @@ export class ChatRoom extends DurableObject<Env> {
   }
   async projectFeedback(roomId: RoomId, before?: string) {return this.serially(() => this.feedbackFor(roomId).list(before));}
   async projectFeedbackHistory(roomId: RoomId, id: string) {return this.serially(async () => ({item: await this.feedbackFor(roomId).get(id), events: await this.feedbackFor(roomId).history(id)}));}
+  private async snapshotFollowUp(roomId: RoomId, repository: string) {
+    const project = await this.storedProject(roomId);
+    if (!project || project.repository !== repository.toLowerCase() || project.facts.status === "completed") return null;
+    for (const line of project.facts.progress ?? []) {
+      const text = /^下一步[：:]\s*(.+)$/.exec(line)?.[1]?.trim();
+      if (!text) continue;
+      const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([project.repository, text])));
+      const hex = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("");
+      return {text, requestId: "followup-" + hex};
+    }
+    return null;
+  }
+  async projectDiscussionFollowUp(roomId: RoomId, repository: string) {
+    return this.serially(async () => {
+      if (await this.isDeleted()) return {item: null, snapshot: null};
+      const store = this.feedbackFor(roomId);
+      const source = await this.snapshotFollowUp(roomId, repository);
+      const linked = source && await store.event(source.requestId);
+      const item = linked && await store.get(linked.feedbackId);
+      if (item && item.status !== "accepted" && item.status !== "rejected") return {item, snapshot: null};
+      const open = await store.openFollowUp();
+      return {item: open, snapshot: !open && !linked ? source?.text ?? null : null};
+    });
+  }
   async createProjectFeedback(roomId: RoomId, input: NewFeedback, actor: User, adopted = false, proposalMessageId: string | null = null, authorizedAt = Date.now()) {
     return this.serially(async () => {
       if (await this.isDeleted() || await this.revocationsFor(roomId).refuse([actor.id], authorizedAt)) throw new Error("频道权限已变化");
+      if (input.requestId.startsWith("followup-")) throw new Error("反馈请求编号无效");
       return this.feedbackFor(roomId).create(input, actor, adopted, proposalMessageId);
+    });
+  }
+  async trackProjectSnapshotFollowUp(roomId: RoomId, repository: string, text: string, input: NewFeedback, actor: User, authorizedAt: number) {
+    return this.serially(async () => {
+      if (await this.isDeleted() || await this.revocationsFor(roomId).refuse([actor.id], authorizedAt)) return null;
+      const source = await this.snapshotFollowUp(roomId, repository);
+      if (!source || source.text !== text) return null;
+      return this.feedbackFor(roomId).create({...input, requestId: source.requestId, demo: false}, actor);
     });
   }
   async changeProjectFeedback(roomId: RoomId, id: string, input: ChangeFeedback, actor: User, canManage: boolean, assignee?: User | null, authorizedAt = Date.now()) {
@@ -1857,6 +1905,9 @@ export class ChatRoom extends DurableObject<Env> {
     const appTools = given.map((tool) => appTool(this.env, bot.id, tool, askedBy, { described: tool, shown: this.showsCallsOf(roomId, access, message, tool), cards: this.showsCardsOf(roomId, bot, message, tool) }));
     const tools = takesTools ? [roomSearch(this.env, roomId, read), ...projectTools(this.env,roomId,author.id), ...appTools] : [];
     const asked = loggedIn({ ...questionFor({ ...bot, instructions, promptTemplate }, conversation, author, where, levels, new Date(), webTools, webSearchOn), tools }, access);
+    if (this.env.PULSE_TEAM_PROJECT_CHANNELS === "true") {
+      asked.instructions += "\n用提问者的语言，用日常说法。第一段用一两句直接回答，先说结论、当前状态或下一步，省略套话。需要详细说明时另起一段，把来源和链接放在最后一段。";
+    }
     if (bot.name === "项目助手" && gateway.model === "juxon/deepseek-v4.1-flash" && this.env.EMBER_LAN_TLS_PROXY_KEY) {
       const binding = pulseBinding(this.env, roomId);
       const registered = !binding && (await workspace(this.env).teamProjectBindings([roomId]))[roomId];

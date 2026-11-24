@@ -2700,4 +2700,4 @@ export function parseServerFrame<Frame extends { type: string } = ServerFrame>(r
 export type { PulseSnapshot, PulseUsage, PulseIntroduction, PulseTeam, PulseMessageFilter, PulseMessagePage, PulseProjectSummary, PulseAdoptionRequest, PulseAdoptionAnswer } from "./pulse.ts";
 export { compactPulseNumber, pulseStatusLabels, parsePulseAdoption, type PulseStatus } from "./pulse.ts";
 export {feedbackStatuses, parseNewFeedback, parseChangeFeedback, validFeedbackUrl} from "./project-work.ts";
-export type {BusinessOverview, BusinessModule, BusinessMilestone, ProjectFeedback, FeedbackEvent, FeedbackPage, FeedbackStatus, FeedbackAction, FeedbackEvidence, NewFeedback, ChangeFeedback} from "./project-work.ts";
+export type {BusinessOverview, BusinessModule, BusinessMilestone, ProjectFeedback, FeedbackEvent, FeedbackPage, FeedbackStatus, FeedbackAction, FeedbackEvidence, NewFeedback, ChangeFeedback, ProjectFollowUp} from "./project-work.ts";

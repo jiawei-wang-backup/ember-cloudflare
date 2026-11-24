@@ -116,7 +116,7 @@ export async function acceptanceReply(data: PulseSnapshot, roomId: string, cooki
     }
   }
   if (compact) {
-    const links = [link(base, "项目总览"), ...sources.slice(0, 3)];
+    const links = [link(`${base}?view=overview`, "项目总览"), ...sources.slice(0, 3)];
     parts.push("<p>" + links.map(source => source.body).join(" · ") + html`${freshness}</p>`.body);
   }
   if (!feedback || !history) parts.push("<p>部分反馈或交付记录暂时读不到，可以打开原频道复核。</p>");

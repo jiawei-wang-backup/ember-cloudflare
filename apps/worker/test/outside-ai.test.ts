@@ -1134,7 +1134,14 @@ it("stores project updates without Pulse and publishes each revision only once",
   const time = Date.now() - 100;
   const first = new Date(time).toISOString(), second = new Date(time + 1).toISOString();
   const a = "a".repeat(32), b = "b".repeat(32);
-  expect((await sync(a, first, {goal: "Persist work", progress: ["First delivery"]})).status).toBe("published");
+  const milestones = [{title:"First delivery", state:"completed", due_on:null}];
+  const otherProject = await found<{room: {id: string}}>(token, "create_project_channel", {repository:"example/unrelated"});
+  expect(await refusal(token, "sync_project_snapshot", {
+    room_id:otherProject.room.id, repository,
+    update_json:JSON.stringify({revision:a, observedAt:first, facts:{progress:["First delivery"]}}),
+  })).toBe(NO_ROOM);
+  expect(await found(token, "read_room", {room_id:otherProject.room.id})).toMatchObject({messages:[]});
+  expect((await sync(a, first, {goal: "Persist work", progress: ["First delivery"], milestones})).status).toBe("published");
   expect((await sync(b, second, {progress: ["Second delivery"]})).status).toBe("published");
   expect((await sync(b, second, {progress: ["Second delivery"]})).status).toBe("unchanged");
   expect((await sync(a, first, {goal: "Persist work", progress: ["First delivery"]})).status).toBe("superseded");
@@ -1145,12 +1152,52 @@ it("stores project updates without Pulse and publishes each revision only once",
     ember_snapshot: true, project: {goal: "Persist work", owner: {display_name: member.user.name}},
     activities: [{title: "Second delivery"}], usage: {input_tokens: null},
   });
+  const withMonitor = await apiWith({PULSE_SOURCE: "dashboard", PULSE_URL: "https://pulse.example"}, url, {headers: as(member)});
+  expect(await withMonitor.json()).toMatchObject({
+    ember_snapshot: true, monitor_url: "https://pulse.example/",
+    usage: {input_tokens: null},
+  });
   expect((await api(url, {headers: as(administrator)})).status).toBe(404);
+  const pulse: Partial<Env> = {PULSE_SOURCE: "dashboard", PULSE_ROOMS: JSON.stringify({[room.id]: {projectId: repository, memberIds:[member.user.id, administrator.user.id]}})};
+  const snapshotUrl = `/api/pulse/ember-snapshot?repository=${encodeURIComponent(repository)}`;
+  expect((await apiWith(pulse, snapshotUrl)).status).toBe(401);
+  expect((await apiWith(pulse, snapshotUrl, {headers: as(administrator)})).status).toBe(404);
+  const snapshotResponse = await apiWith(pulse, snapshotUrl, {headers: as(member)});
+  expect(snapshotResponse.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(await snapshotResponse.json()).toEqual({
+    repository, source:"Ember", updated_at: expect.any(String), goal:"Persist work", milestones, progress:["Second delivery"],
+  });
+  const sidebar = await api("/api/pulse/projects", {headers:as(member)});
+  expect(await sidebar.json()).toMatchObject({projects:[
+    {roomId:room.id, progress:{completed:1, total:1, percent:100, basis:"reported"}},
+  ]});
+  const otherSidebar = await api("/api/pulse/projects", {headers:as(administrator)});
+  expect(await otherSidebar.json()).toMatchObject({projects:[]});
   expect(await found(token, "read_project_snapshot", {room_id: room.id})).toMatchObject({
     snapshot: {repository, facts: {goal: "Persist work", progress: ["Second delivery"]}},
   });
-  const history = await found<{messages: unknown[]}>(token, "read_room", {room_id: room.id});
+  const history = await found<{messages: {text:string}[]}>(token, "read_room", {room_id: room.id});
   expect(history.messages).toHaveLength(2);
+  expect(history.messages.at(-1)?.text).toMatch(/^项目进展 · example\/independent\s+Second delivery\s+目标 · Persist work/);
+  const saved = await found<{status:string}>(token, "sync_project_snapshot", {
+    room_id: room.id, repository, announce:false,
+    update_json:JSON.stringify({revision:"c".repeat(32), observedAt:new Date().toISOString(), facts:{progress:["可用情况：待确认"]}}),
+  });
+  expect(saved.status).toBe("saved");
+  expect(await found(token, "read_project_snapshot", {room_id:room.id})).toMatchObject({snapshot:{facts:{progress:["可用情况：待确认"]}}});
+  expect(await found(token, "read_room", {room_id:room.id})).toMatchObject({messages:history.messages});
+  const rev = "c".repeat(32);
+  const receipt = `/api/onboarding/receipt?room=${room.id}&revision=${rev}`;
+  const lan = {EMBER_LAN_WORKSPACE_ID:"test-workspace", EMBER_LAN_CLIENT_RELEASE:"r27"};
+  expect((await apiWith(lan, receipt, {headers:as(administrator)})).status).toBe(404);
+  const self = await apiWith(lan, receipt, {method:"POST", headers:as(member)});
+  expect(await self.json()).toMatchObject({peer_confirmed:false, can_confirm:false});
+  // The room records a distinct member's confirmation for this version only.
+  expect(await roomStub(room.id).onboardingReceipt(room.id, rev, administrator.user.id, true))
+    .toMatchObject({peer_confirmed:true, can_confirm:true});
+  const confirmed = await apiWith(lan, receipt, {headers:as(member)});
+  expect(await confirmed.json()).toMatchObject({peer_confirmed:true, can_confirm:false});
+  expect(await roomStub(room.id).onboardingReceipt(room.id, "b".repeat(32), administrator.user.id)).toBeNull();
 });
 
 it("uses a Chinese project title and reuses the registered room in the LAN workspace", async () => {
@@ -1187,6 +1234,7 @@ it("uses a Chinese project title and reuses the registered room in the LAN works
 it("reuses an explicitly bound open project channel", async () => {
   const { member, administrator } = await setUpOn();
   const room = await createRoom("Existing project", {as: administrator});
+  const registered = await createRoom("Registered project", {as: administrator});
   const hidden = await createRoom("Another private project", {as: administrator, closedTo:[administrator.user.id]});
   const token = (await connected(member, {scope:"read write private create_project_channels"}, [], ["private", "create_project_channels"])).tokens.access_token;
   const original = await runInDurableObject(workspaceStub(), async (instance, state) => {
@@ -1195,6 +1243,7 @@ it("reuses an explicitly bound open project channel", async () => {
     object.env = {...original, PULSE_TEAM_PROJECT_CHANNELS:"true",
       PULSE_ROOMS:JSON.stringify({[room.id]:{projectId:"example/existing"}})};
     await state.storage.put(`pulse-project-room:${hidden.id}`, {repository:"example/hidden",ownerId:administrator.user.id});
+    await state.storage.put(`pulse-project-room:${registered.id}`, {repository:"example/registered",ownerId:administrator.user.id});
     return original;
   });
   try {
@@ -1208,6 +1257,24 @@ it("reuses an explicitly bound open project channel", async () => {
     })).toBe(NO_ROOM);
     expect(await found(token, "find_project_channel", {repository:"example/hidden"})).toEqual({status:"forbidden"});
     expect((await called(token, "create_project_channel", {repository:"example/hidden"})).isError).toBe(true);
+    // A previously approved snapshot remains readable after its channel becomes open.
+    const observedAt = new Date().toISOString();
+    await roomStub(registered.id).syncProjectSnapshot(registered.id, "example/registered", {
+      revision:"b".repeat(32), observedAt, facts:{goal:"Ship the dashboard", milestones:[
+        {title:"Implement the dashboard", state:"completed", due_on:null},
+        {title:"Verify the dashboard", state:"pending", due_on:null},
+      ]},
+    }, {user:administrator.user, tags:[], authorizedAt:Date.now()});
+    const pulse: Partial<Env> = {PULSE_SOURCE:"dashboard", PULSE_TEAM_PROJECT_CHANNELS:"true"};
+    const overview = await apiWith(pulse, `/api/rooms/${registered.id}/project?audience=room`, {headers:as(administrator)});
+    expect(await overview.json()).toMatchObject({ember_snapshot:true, project:{goal:"Ship the dashboard"}});
+    const snapshotUrl = "/api/pulse/ember-snapshot?repository=example%2Fregistered";
+    const snapshot = await apiWith(pulse, snapshotUrl, {headers:as(administrator)});
+    expect(await snapshot.json()).toMatchObject({source:"Ember", goal:"Ship the dashboard"});
+    const sidebar = await apiWith(pulse, "/api/pulse/projects", {headers:as(member)});
+    expect(await sidebar.json()).toMatchObject({projects:[
+      {roomId:registered.id, progress:{completed:1, total:2, percent:50, basis:"reported"}},
+    ]});
   } finally {
     await runInDurableObject(workspaceStub(), instance => void ((instance as unknown as {env: Env}).env = original));
   }

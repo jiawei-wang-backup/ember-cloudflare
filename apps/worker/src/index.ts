@@ -1118,12 +1118,15 @@ async function connectToRoom(request: Request, env: Env, roomId: RoomId, huddle 
 
 /** What answers an API request, if one of the API's routes takes it. */
 function apiAction(request: Request, env: Env, pathname: string, background?: (work: Promise<unknown>) => void): (() => Response | Promise<Response>) | null {
+  if (pathname === "/api/onboarding" && request.method === "GET") return () => lanOnboarding(request, env);
+  if (pathname === "/api/onboarding/receipt" && ["GET","POST"].includes(request.method)) return () => lanOnboarding(request, env, true);
   if (pathname === "/api/bootstrap" && request.method === "GET") return () => bootstrap(request, env);
   const pulseRoom = pathname.match(/^\/api\/rooms\/([^/]+)\/project$/);
   if (pulseRoom && request.method === "GET") return () => pulseRoute(request,env,pulseRoom[1]!,background);
   const assistantContext = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/assistant-context$/);
   if (assistantContext && ["GET","HEAD"].includes(request.method)) return () => projectAssistantContext(request,env,assistantContext[1]!);
   if (pathname === "/api/pulse/projects" && request.method === "GET") return () => pulseSummaries(request, env, background);
+  if (pathname === "/api/pulse/ember-snapshot" && request.method === "GET") return () => emberPulseProject(request, env);
   const feedback = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/feedback(?:\/([a-zA-Z0-9_-]{1,80}))?$/);
   if (feedback && ["GET", "POST", "PATCH"].includes(request.method)) return () => projectFeedbackRoute(request, env, feedback[1]!, feedback[2]);
   const pulseAction = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/(messages|adoptions)$/);
@@ -1410,6 +1413,7 @@ export default {
     return withHeaders(response, request, env, { version: !isUp && !isFile, policy: !isFile });
   },
 } satisfies ExportedHandler<Env>;
-import { pulseBinding, pulseRoute, pulseSummaries } from "./pulse";
+import { emberPulseProject, pulseBinding, pulseRoute, pulseSummaries } from "./pulse";
 import { projectAssistantContext, pulseCollaboration } from "./pulse-collaboration";
 import { projectFeedbackRoute } from "./project-feedback";
+import { lanOnboarding } from "./lan-onboarding";

@@ -1,4 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import type { TLSSocket } from "node:tls";
@@ -25,6 +26,7 @@ const demoEmailByLogin = new Map<string, string>(people.flatMap(([key, , , login
 const lan = process.argv.slice(2).includes("--lan");
 const tlsDir = lan ? process.env.EMBER_LAN_TLS_DIR : undefined;
 const tlsProxyKey = tlsDir && readFileSync(path.join(tlsDir, "proxy-key"), "utf8").trim();
+let pulsePreviewPort: number | undefined;
 const isTls = (req: http.IncomingMessage) => (req.socket as TLSSocket).encrypted === true;
 const prPollIntervalMs = 30 * 60_000;
 if (process.argv.slice(2).some(arg => arg !== "--lan")) throw new Error("启动参数只支持 --lan。");
@@ -52,6 +54,23 @@ const headersOf = (req: http.IncomingMessage) => {
   return headers;
 };
 mkdirSync(state, { recursive: true });
+const clientRelease = "r28";
+const onboardingIdFile = path.join(state, "onboarding-id");
+if (tlsProxyKey && !existsSync(onboardingIdFile)) {
+  try {writeFileSync(onboardingIdFile, randomUUID().replaceAll("-", ""), {flag:"wx", mode:0o600});}
+  catch (error) {if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;}
+}
+const onboardingId = tlsProxyKey && readFileSync(onboardingIdFile, "utf8").trim();
+if (onboardingId && !/^[a-f0-9]{32}$/.test(onboardingId)) throw new Error("Invalid workspace onboarding identity");
+const clientZip = {file:path.join(root, "docs/lan-client", `project-pulse-report-3.6.0-lan-${clientRelease}.zip`), type:"application/zip"};
+const onboardingAssets = new Map([
+  ["/onboarding", {file:path.join(import.meta.dirname, "onboarding.html"), type:"text/html; charset=utf-8"}],
+  ["/onboarding/client.zip", clientZip],
+  ...["windows", "macos", "linux"].map(platform => [`/onboarding/${platform}.zip`, clientZip] as const),
+  ["/onboarding/ember-icon.png", {file:path.join(root, "apps/web/public/logos/app-icon-48.png"), type:"image/png"}],
+  ["/onboarding/prompt.txt", {file:path.join(root, "docs/lan-client", `ember-lan-onboarding-${clientRelease}.txt`), type:"text/plain; charset=utf-8"}],
+  ["/onboarding/page.js", {file:path.join(import.meta.dirname, "onboarding.js"), type:"text/javascript; charset=utf-8"}],
+]);
 const assetRoot = path.join(state, "web-dist");
 const webRoot = path.join(root, "apps/web");
 execFileSync(process.execPath, [path.join(webRoot, "node_modules/vite/bin/vite.js"), "build", "--mode", "demo-cn", "--outDir", assetRoot, "--emptyOutDir"], {cwd:webRoot, stdio:"inherit"});
@@ -114,6 +133,31 @@ async function demoSignIn(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 }
 
+function servePulsePreview(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+  const upstreamPath = url.pathname.slice("/project-pulse".length);
+  const allowed = upstreamPath === "/" || upstreamPath === "/api/v1/dashboard" ||
+    /^\/(?:assets\/[a-z0-9.-]+\.(?:css|svg)|src\/[a-z0-9.-]+\.js)$/i.test(upstreamPath);
+  if (!pulsePreviewPort || !isTls(req) || !allowed || !["GET", "HEAD"].includes(req.method || "")) {
+    res.writeHead(404).end();
+    return;
+  }
+  // The Pulse server receives only its existing read request, with no Ember credentials.
+  const upstream = http.request({host: "127.0.0.1", port: pulsePreviewPort,
+    path: upstreamPath + url.search, method: req.method, timeout: 5000}, answer => {
+    for (const header of ["content-type", "content-length", "content-security-policy", "x-content-type-options"]) {
+      const value = answer.headers[header];
+      if (value !== undefined) res.setHeader(header, value);
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.writeHead(answer.statusCode ?? 502);
+    answer.pipe(res);
+  });
+  upstream.on("timeout", () => upstream.destroy(new Error("Pulse preview timed out")));
+  upstream.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+  res.on("close", () => { if (!res.writableFinished) upstream.destroy(); });
+  upstream.end();
+}
+
 const handleRequest: http.RequestListener = (req, res) => {
   // Local tooling and webhook secrets are never exposed through the LAN entry.
   if (!loopback(req.socket.remoteAddress) && localPath(req)) {res.writeHead(404).end(); return;}
@@ -131,7 +175,19 @@ const handleRequest: http.RequestListener = (req, res) => {
     res.end(JSON.stringify({ identity, storage: ".wrangler/demo-cn/state" }));
     return;
   }
-  const pathname = new URL(req.url || "/", origin).pathname;
+  const address = new URL(req.url || "/", origin);
+  const {pathname} = address;
+  const onboardingAsset = onboardingAssets.get(pathname);
+  if (onboardingAsset) {
+    if (!onboardingId || !isTls(req) || !["GET","HEAD"].includes(req.method ?? "") || !existsSync(onboardingAsset.file)) {res.writeHead(404).end(); return;}
+    res.writeHead(200, {"Content-Type":onboardingAsset.type, "Cache-Control":"no-store", "X-Content-Type-Options":"nosniff",
+      "Content-Security-Policy":"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+      ...(pathname.endsWith(".zip") && {"Content-Disposition":`attachment; filename="${path.basename(onboardingAsset.file)}"`})});
+    if (req.method === "HEAD") res.end();
+    else createReadStream(onboardingAsset.file).on("error", () => res.destroy()).pipe(res);
+    return;
+  }
+  if (pathname.startsWith("/project-pulse/")) {servePulsePreview(req, res, address); return;}
   if (pathname === "/api/demo-session") {void demoSignIn(req, res); return;}
   if (["GET", "HEAD"].includes(req.method || "") && (staticPrefixes.some(prefix => pathname.startsWith(prefix)) || ["/ember-icon.png", "/app-version.json", "/globe.svg"].includes(pathname))) {void staticAsset(req, res); return;}
   const upstream = http.request({ hostname: "127.0.0.1", port: 8790, path: req.url, method: req.method, headers: headersOf(req) }, (answer) => {
@@ -174,6 +230,19 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     const configured = JSON.parse(readFileSync(config, "utf8"));
     configured.assets.directory = assetRoot;
     if (tlsProxyKey) configured.vars.EMBER_LAN_TLS_PROXY_KEY = tlsProxyKey;
+    if (onboardingId) {
+      configured.vars.EMBER_LAN_WORKSPACE_ID = onboardingId;
+      configured.vars.EMBER_LAN_CLIENT_RELEASE = clientRelease;
+    }
+    delete configured.vars.PULSE_EMBER_DASHBOARD_URL;
+    const publicPulse = configured.vars.PULSE_HTTP_ORIGIN;
+    if (tlsProxyKey && configured.vars.PULSE_SOURCE === "dashboard" && typeof publicPulse === "string" && URL.canParse(publicPulse)) {
+      const dashboard = new URL(publicPulse);
+      if (dashboard.protocol === "http:" && dashboard.port && !dashboard.username && !dashboard.password) {
+        pulsePreviewPort = Number(dashboard.port);
+        configured.vars.PULSE_EMBER_DASHBOARD_URL = `https://${dashboard.hostname}:5443/project-pulse/`;
+      }
+    }
     const deviceBindingKey = path.join(state, "pulse-device-bind-token");
     if (existsSync(deviceBindingKey)) configured.vars.PULSE_DEVICE_BIND_TOKEN = readFileSync(deviceBindingKey, "utf8").trim();
     configured.vars.PULSE_DEMO_SNAPSHOTS = JSON.stringify(projectSnapshots(state));

@@ -79,7 +79,7 @@ export function businessOverview(data: PulseSnapshot): BusinessOverview | undefi
       availability: data.project.status === "blocked" ? "项目存在阻塞，历史交付不代表当前入口已恢复" : "以下为已有交付记录，当前完整使用仍需按验收条件确认"};
   });
   const extra = data.milestones.filter(m => !used.has(m.title));
-  if (extra.length) modules.push({id: "other", name: "其他阶段记录", outcome: "保留新出现、尚未归入业务模块的阶段证据。", scenario: "来源更新后核对新增事项。", help: "请负责人确认这些事项的业务归属。", acceptance: "明确业务归属后按原始证据复核。", stages: undefined, milestones: extra.map((m, i) => ({id: `other-${i}`, title: m.title, sourceTitle: m.title, state: m.state, evidence: m.evidence || "未提供"})), available: [], blockers: extra.map(m => m.title), status: "unknown", availability: "业务归属待确认"});
+  if (extra.length) modules.push({id: "other", name: "其他阶段记录", outcome: "保留新出现、尚未归入业务模块的阶段证据。", scenario: "来源更新后核对新增事项。", help: "请负责人确认这些事项的业务归属。", acceptance: "明确业务归属后按原始证据复核。", stages: undefined, milestones: extra.map((m, i) => ({id: `other-${i}`, title: m.title, sourceTitle: m.title, state: m.state, evidence: m.evidence || "未提供"})), available: [], blockers: extra.filter(m => !["completed", "accepted"].includes(m.state)).map(m => m.title), status: "unknown", availability: "业务归属待确认"});
   const delivery = businessJourneys(data.project.key || data.project.full_name).map(journey => {
     const involved = modules.filter(m => journey.moduleIds.includes(m.id));
     const stages = involved.flatMap(m => m.milestones), recorded = stages.filter(m => ["completed", "accepted"].includes(m.state)).length;

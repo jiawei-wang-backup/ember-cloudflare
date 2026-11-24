@@ -1,13 +1,13 @@
 import {readFileSync} from "node:fs";
 import path from "node:path";
-import {parseEnv} from "node:util";
 import {pulseStatusLabels, threadPath, type Message, type PulseMessagePage, type PulseSnapshot} from "@ember/protocol";
 import {html, paragraph} from "../seed/markup.ts";
 import {origin, state} from "./local.ts";
 import {deliveryContexts} from "./github-deliveries.ts";
+import {deepSeekKey} from "./delivery-summary.ts";
 
 const instructions = [
-  "你是当前项目频道的助手。用大白话，首句直接回答问题。需要时再补至多两条关键信息或下一步，通常 150 字以内。省略客套、问题复述、统计口径和无关背景。",
+  "你是当前项目频道的助手。用大白话，第一段用一两句直接回答，先说结论、当前状态或下一步，通常 100 字以内。需要补充细节时空一行另写，来源放最后。省略客套、问题复述和无关背景。",
   "语气像亲切、稍微俏皮的同事，偶尔用一句自然的口语。避免叠词、连续表情或每次都用同一句开场。讲到风险、受阻或验收时，直接把事实说清楚。",
   "用当前频道提供的讨论、GitHub 文档和项目统计回答。统计可用时用它核对用量和已上报进度。技术架构优先参考 GitHub 文档。只有讨论时，注明信息来自讨论。",
   "资料可能为空或不完整。先回答有依据的部分，再简短说明缺少哪项信息。不要把暂未上报写成没有进展，也不要把未提供的数字写成零。",
@@ -40,7 +40,7 @@ export async function modelReply(data: PulseSnapshot | null, roomId: string, coo
   try {
     key = deep
       ? readFileSync(path.join(state, "openai-pilot.key"), "utf8").trim()
-      : (parseEnv(readFileSync(path.join(state, ".dev.vars"), "utf8")).JUXON_API_KEY ?? "").trim();
+      : deepSeekKey();
   }
   catch {key = "";}
   if (!key) {
@@ -112,10 +112,11 @@ export async function modelReply(data: PulseSnapshot | null, roomId: string, coo
     .replace(/[ \t]+([，。；、！？])/g, "$1")
     .trim();
   if (!body) throw new Error(`${provider} 未返回有效回答`);
-  const sources = [...(data ? [{ref: 1, link: base, label: "项目总览"}] : []), ...related.map(item => ({...item, label: "相关讨论"})),
+  const sources = [...(data ? [{ref: 1, link: `${base}?view=overview`, label: "项目总览"}] : []), ...related.map(item => ({...item, label: "相关讨论"})),
     ...documents.map(doc => ({ref: doc.ref, link: doc.url, label: doc.file})),
     ...pulls.filter(pr => /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr.link)).map(pr => ({...pr, label: "代码改动 #" + pr.link.split("/").at(-1)}))];
   const links = sources.filter(item => item.ref === 1 || cited.has(item.ref)).slice(0, 4)
     .map(item => html`<a href="${item.link}">${item.label}</a>`.body);
-  return paragraph(body.slice(0, 3000)).body + (links.length ? "<p>原始记录 · " + links.join(" · ") + "</p>" : "");
+  return body.slice(0, 3000).split(/\n[ \t]*\n+/).map(block => paragraph(block).body).join("") +
+    (links.length ? "<p>原始记录 · " + links.join(" · ") + "</p>" : "");
 }

@@ -36,6 +36,21 @@ def connection():
     return build_opener(ProxyHandler({}), NoRedirect(), HTTPSHandler(context=context))
 
 
+def check_workspace():
+    path = PACKAGE / "ember-workspace.json"
+    if not path.is_file():
+        raise ValueError("缺少工作区配置，请从团队接入页重新下载完整 ZIP")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    platform = {"win32":"windows", "darwin":"macos", "linux":"linux"}.get(sys.platform)
+    if manifest.get("platform", "universal") not in ("universal", platform):
+        raise ValueError("客户端包与当前操作系统不匹配，请从团队接入页下载对应版本")
+    with connection().open(ORIGIN + "/api/onboarding", timeout=8) as response:
+        actual = json.load(response)
+    if not manifest.get("workspace_id") or actual.get("workspace_id") != manifest["workspace_id"]:
+        raise ValueError("当前 Ember 与接入包的团队工作区不一致。请从团队接入页重新下载。")
+    return {**actual, "installed_release": manifest["client_release"], "platform": platform}
+
+
 def request(path, payload, *, form=False, token=None, protocol=None):
     headers = {"Content-Type": "application/x-www-form-urlencoded" if form else "application/json",
                "Accept": "application/json, text/event-stream"}
@@ -62,6 +77,7 @@ def save(client, tokens):
 
 
 def connect(include_private=False, include_write=False, create_projects=False, open_browser=False):
+    check_workspace()
     scopes = ["read"]
     if include_write or create_projects:
         scopes.append("write")

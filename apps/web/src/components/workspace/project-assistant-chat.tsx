@@ -4,7 +4,7 @@ import type {User} from "@ember/protocol";
 import {Xmark} from "@/components/icons/iconoir";
 import {PageLink} from "@/components/page-link";
 import {UserAvatar} from "./user-avatar";
-import {MessageBody} from "./message-body";
+import {CompactReply} from "./compact-reply";
 
 const questions = ["项目现在怎么样？", "项目还差什么？", "已经做完了什么？"];
 type Reference = {text: string; author: string; link: string};
@@ -108,7 +108,7 @@ export function ProjectAssistantChat({roomId, turns, onAnswer, onShared, onShare
           <div className="flex items-start gap-2.5">
             {avatar(assistant)}
             <div className="min-w-0 flex-1 space-y-2">
-              <MessageBody nodes={displayBody(turn.html, "", location.hostname)} mentions={[]} className="text-sm leading-relaxed wrap-anywhere"/>
+              <CompactReply nodes={displayBody(turn.html, "", location.hostname)} mentions={[]} className="text-sm leading-relaxed wrap-anywhere"/>
               {turn.shared ? <p className="text-xs text-message-muted">已发到讨论 · <button type="button" className="text-link underline" onClick={onDiscussion}>查看讨论</button></p>
                 : <button type="button" disabled={shareDisabled || sharing !== null} onClick={() => void share(turn)}
                   className="rounded-md px-2 py-1.5 text-xs text-message-muted hover:bg-hover hover:text-foreground disabled:opacity-50">{sharing === turn.id ? "正在发送…" : "发到讨论"}</button>}
