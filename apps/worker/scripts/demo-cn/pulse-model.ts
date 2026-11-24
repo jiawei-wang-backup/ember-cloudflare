@@ -69,9 +69,10 @@ export async function modelReply(data: PulseSnapshot | null, roomId: string, coo
   const facts = data ? {
     ref: 1,
     project: data.project.full_name,
-    goal: data.business?.outcome || data.project.goal,
+    goal: data.project.goal || data.business?.outcome,
     status: statusLabel(data.project.status),
     progress: data.milestone_progress,
+    recentProgress: data.activities.slice(0, 8).map(activity => activity.summary || activity.title).filter(Boolean),
     freshness: data.freshness || {status: "live", captured_at: data.fetched_at},
     members: data.members.map(member => withoutMemberId(member.display_name)).slice(0, 20),
     modules: data.business?.modules.slice(0, 12).map(module => ({name: module.name.slice(0, 100), outcome: module.outcome.slice(0, 250)})),

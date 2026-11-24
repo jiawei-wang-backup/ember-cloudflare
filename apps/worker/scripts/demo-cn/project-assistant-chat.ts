@@ -18,7 +18,11 @@ export function handleProjectAssistantChat(request: IncomingMessage, response: S
     send(403, {error: "请在项目页内提问"});
     return true;
   }
-  const cookie = request.headers.cookie;
+  // The calls below go to the loopback HTTP proxy, which expects the HTTP cookie name.
+  const secureSession = secure && request.headers.cookie.split(";").map(part => part.trim())
+    .find(part => /^__Host-session_token=[\w-]{43}$/.test(part));
+  if (secure && !secureSession) {send(401, {error: "请先登录"}); return true;}
+  const cookie = secureSession ? secureSession.slice("__Host-".length) : request.headers.cookie;
   void (async () => {
     try {
       const parts: Buffer[] = [];

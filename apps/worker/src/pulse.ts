@@ -73,7 +73,8 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
   const registered = env.PULSE_TEAM_PROJECT_CHANNELS === "true" && settings.room.kind === "closed"
     ? (await workspace(env).teamProjectBindings([roomId]))[roomId] : undefined;
   const sharedKey = teamProjectKey(env, settings.room, registered?.repository);
-  const stored = settings.room.kind === "closed" && (explicit || settings.room.channelGroup === "project")
+  const snapshotRoom = settings.room.kind === "closed" || (settings.room.kind === "open" && explicit?.allRoomMembers === true);
+  const stored = snapshotRoom && (explicit || settings.room.channelGroup === "project")
     ? await env.CHAT_ROOM.getByName(roomId).projectSnapshot(roomId, explicit?.projectId ?? registered?.repository ?? null)
     : null;
   const local = stored ? projectOverview(stored, days) : null;
@@ -119,11 +120,11 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
     if (room.kind === "direct") return [];
     const binding = pulseBinding(env, room.id);
     const projectId = binding ? (binding.allRoomMembers === true || binding.memberIds.includes(user.id) ? binding.projectId : undefined) : teamProjectKey(env, room, teamKeys[room.id]?.repository);
-    return projectId ? [{room, projectId}] : [];
+    return projectId ? [{room, projectId, snapshotRoom: room.kind === "closed" || binding?.allRoomMembers === true}] : [];
   });
-  const results = await Promise.all(rooms.map(async ({room, projectId}) => {
+  const results = await Promise.all(rooms.map(async ({room, projectId, snapshotRoom}) => {
     try {
-      const local = room.kind === "closed" && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId);
+      const local = snapshotRoom && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId);
       const data = local ? projectOverview(local, 7) : await pulseSnapshot(env, projectId, 7, background);
       return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness};
     }

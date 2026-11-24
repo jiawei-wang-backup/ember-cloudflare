@@ -1203,6 +1203,9 @@ it("reuses an explicitly bound open project channel", async () => {
     const result = await found<{room:{id:string;kind:string}}>(token, "create_project_channel", {repository:"example/existing"});
     expect(result.room).toMatchObject({id:room.id,kind:"open"});
     expect((await roomsFor(token)).filter(r => r.name === "Existing project")).toHaveLength(1);
+    expect(await refusal(token, "sync_project_snapshot", {room_id: room.id, repository: "example/existing",
+      update_json: JSON.stringify({revision: "a".repeat(32), observedAt: new Date().toISOString(), facts: {goal: "Private project facts"}}),
+    })).toBe(NO_ROOM);
     expect(await found(token, "find_project_channel", {repository:"example/hidden"})).toEqual({status:"forbidden"});
     expect((await called(token, "create_project_channel", {repository:"example/hidden"})).isError).toBe(true);
   } finally {

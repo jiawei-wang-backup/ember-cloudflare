@@ -10,6 +10,8 @@
 
 项目快照由 Ember 保存，频道总览和项目助手优先使用自己的项目资料。用 `prepare-ember` 创建工作目录，按包内 `PROMPT.txt` 写入 `ember-projects.json`，再运行 `sync-ember --work-dir <目录>`。旧项目首次收到 r24 快照前，可继续读取可用的 Pulse 项目数据。
 
+开放频道须在 Ember 服务端明确配置仓库绑定和全频道成员读取权限，才接收项目快照。
+
 会话与 Token 仍由 Pulse 处理。用 `prepare` 生成批次，再用 `sync-pulse --work-dir <目录>` 提交。两条链路分别确认回执、独立重试。也可以在同一目录准备两类文件后运行 `submit`，它先尝试 Ember，再处理 Pulse。退出 2 表示存在未完成的环节，逐项查看回执。设备关联 Pulse 与本机代答也可以各自核对。
 
 ## 公司 GitHub 仓库

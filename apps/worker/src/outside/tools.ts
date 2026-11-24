@@ -264,13 +264,13 @@ const FIND_PROJECT_CHANNEL: Tool = {
 const READ_PROJECT_SNAPSHOT: Tool = {
   name: "read_project_snapshot",
   title: "Read an Ember project snapshot",
-  description: "Reads the project facts stored in this private project channel.",
+  description: "Reads the project facts stored in this authorized project channel.",
   takes: {room_id: ROOM_ID},
   required: ["room_id"],
   async run(env, access, {room_id}) {
     const room = await roomOf(env, access, room_id);
-    if (room.kind !== "closed") throw new Refused(NO_ROOM);
     const binding = pulseBinding(env, room.id);
+    if (room.kind !== "closed" && !(room.kind === "open" && binding?.allRoomMembers === true)) throw new Refused(NO_ROOM);
     const stored = await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, binding?.projectId ?? null);
     if (!stored) return {snapshot: null};
     const work = workspace(env);
@@ -285,7 +285,7 @@ const READ_PROJECT_SNAPSHOT: Tool = {
 const SYNC_PROJECT_SNAPSHOT: Tool = {
   name: "sync_project_snapshot",
   title: "Sync an Ember project snapshot",
-  description: "Stores validated project facts and publishes progress once in the given private project channel.",
+  description: "Stores validated project facts and publishes progress once in the given authorized project channel.",
   takes: {room_id: ROOM_ID, repository: {type: "string", description: "Confirmed GitHub repository, owner/name."}, update_json: {type: "string", description: "JSON with revision, observedAt and facts."}},
   required: ["room_id", "repository", "update_json"],
   async run(env, access, {room_id, repository, update_json}) {
@@ -297,8 +297,9 @@ const SYNC_PROJECT_SNAPSHOT: Tool = {
     if (!update) throw new Refused("Invalid project snapshot.");
     const work = workspace(env);
     const room = await work.findOutsideProjectChannel(access, key);
-    if (typeof room === "string" || room.kind !== "closed" || room.id !== room_id) throw new Refused(NO_ROOM);
+    if (typeof room === "string" || room.id !== room_id) throw new Refused(NO_ROOM);
     const binding = pulseBinding(env, room.id);
+    if (room.kind !== "closed" && !(room.kind === "open" && binding?.allRoomMembers === true)) throw new Refused(NO_ROOM);
     if (!await work.canSharePulse(room.id, access.userId, binding?.memberIds ?? [], !binding || binding.allRoomMembers === true))
       throw new Refused("Project facts need permission for the channel's readers.");
     const sender = await work.outsideSender(access, room.id);
