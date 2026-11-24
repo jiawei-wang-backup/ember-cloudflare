@@ -3,7 +3,7 @@ import { credentialsOf } from "./auth";
 import { workspace } from "./workspace";
 import type { Env } from "./env";
 import type { EmberTool, Unlogged } from "./assistant/tool-calls";
-import { dashboardProject } from "./pulse-dashboard";
+import { dashboardProject, ProjectNotReported } from "./pulse-dashboard";
 import {DashboardCache, fetchDashboard, type BackgroundWork} from "./pulse-dashboard-cache";
 import { pulseIntroduction } from "./pulse-context";
 import { businessOverview } from "./pulse-business";
@@ -86,7 +86,11 @@ export async function pulseRoute(request: Request, env: Env, roomId: string, bac
     const owner = members.find(member => member.id === ownerId && !member.bot);
     return Response.json({...data, business: businessOverview(data), can_adopt: settings.canAdminister, introduction: pulseIntroduction(binding.projectId), team: {people: members.filter(p => !p.bot).length, bots: members.filter(p => p.bot).length, members, ...(registered && {owner: owner ? {id: owner.id, name: owner.name} : null})}}, {headers});
   }
-  catch (error) { console.error("Project Pulse unavailable:",error instanceof Error?error.message:"unknown"); return Response.json({error:"Project Pulse 暂不可用，请稍后重试"},{status:502,headers}); }
+  catch (error) {
+    if (error instanceof ProjectNotReported) return Response.json({code:"project_not_reported",error:error.message},{status:404,headers});
+    console.error("Project Pulse unavailable:",error instanceof Error?error.message:"unknown");
+    return Response.json({error:"Project Pulse 暂不可用，请稍后重试"},{status:502,headers});
+  }
 }
 
 export async function pulseSummaries(request: Request, env: Env, background?: BackgroundWork): Promise<Response> {

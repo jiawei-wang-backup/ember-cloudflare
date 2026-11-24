@@ -7,6 +7,18 @@ import type {Env} from "../src/env";
 const projectId="11111111-1111-4111-8111-111111111111";
 beforeEach(freshDeploy);
 afterEach(()=>vi.restoreAllMocks());
+it("loads project assistant context for room members without a Pulse service", async () => {
+  const owner = await signIn("Ada"), other = await signIn("Grace");
+  const room = await createRoom("Project discussion", {as:owner,closedTo:[owner.user.id]});
+  const bindings: Partial<Env> = {PULSE_SOURCE:"dashboard", PULSE_ROOMS:JSON.stringify({[room.id]:{projectId:"example/project",memberIds:[owner.user.id]}})};
+  const url = `/api/rooms/${room.id}/project/assistant-context`;
+  expect((await apiWith(bindings,url)).status).toBe(401);
+  expect((await apiWith(bindings,url,{headers:{Cookie:other.cookie}})).status).toBe(404);
+  const context = await apiWith(bindings,url,{headers:{Cookie:owner.cookie}});
+  expect(context.status).toBe(200);
+  expect(await context.json()).toEqual({roomName:"Project discussion",projectKey:"example/project",messages:[]});
+  expect((await apiWith(bindings,url,{method:"HEAD",headers:{Cookie:owner.cookie}})).status).toBe(200);
+});
 it("checks sign-in, membership and explicit project grant before fetching",async()=>{
   const ada=await signIn("Ada"),grace=await signIn("Grace");
   const room=await createRoom("Pulse",{as:ada,closedTo:[ada.user.id]});

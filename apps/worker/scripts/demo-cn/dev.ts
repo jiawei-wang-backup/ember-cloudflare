@@ -125,7 +125,7 @@ const handleRequest: http.RequestListener = (req, res) => {
   }
   if (handleDemoBot(req, res)) return;
   if (handleProjectBot(req,res)) return;
-  if (handleProjectAssistantChat(req, res)) return;
+  if (handleProjectAssistantChat(req, res, isTls(req))) return;
   if (req.url === "/__demo_cn_identity") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ identity, storage: ".wrangler/demo-cn/state" }));

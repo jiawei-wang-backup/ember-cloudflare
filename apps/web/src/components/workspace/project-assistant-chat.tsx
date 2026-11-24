@@ -8,8 +8,8 @@ import {MessageBody} from "./message-body";
 
 const questions = ["项目现在怎么样？", "项目还差什么？", "已经做完了什么？"];
 type Reference = {text: string; author: string; link: string};
-export type AssistantTurn = {id: number; question: string; html: string; shared?: boolean};
-export type ProjectQuickAnswer = Pick<AssistantTurn, "question" | "html">;
+export type AssistantTurn = {id: number; question: string; html: string; requiresPulseGrant?: boolean; shared?: boolean};
+export type ProjectQuickAnswer = Pick<AssistantTurn, "question" | "html" | "requiresPulseGrant">;
 
 export function ProjectAssistantChat({roomId, turns, onAnswer, onShared, onShare, shareDisabled, onDiscussion, me, bot, reference, onClearReference}: {
   roomId: string;
@@ -52,10 +52,10 @@ export function ProjectAssistantChat({roomId, turns, onAnswer, onShared, onShare
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
         body: JSON.stringify({question, context, reference: reference?.text.slice(0, 600)}),
       });
-      const result = await response.json().catch(() => ({})) as {html?: string; error?: string};
+      const result = await response.json().catch(() => ({})) as {html?: string; error?: string; requiresPulseGrant?: boolean};
       if (!response.ok || !result.html) throw new Error(result.error || "项目助手暂未答复，请重试");
       if (!controller.signal.aborted) {
-        onAnswer({question, html: result.html});
+        onAnswer({question, html: result.html, ...(result.requiresPulseGrant && {requiresPulseGrant:true})});
         if (reference) onClearReference();
       }
     } catch (cause) {

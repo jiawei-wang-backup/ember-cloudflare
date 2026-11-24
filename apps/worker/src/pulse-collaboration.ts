@@ -11,6 +11,26 @@ const headers = {"Cache-Control": "no-store"};
 const problem = (status: number, error: string) => Response.json({error}, {status, headers});
 const paragraph = (text: string) => `<p>${escapeText(text).replace(/\n/g, "<br>")}</p>`;
 
+export async function projectAssistantContext(request: Request, env: Env, roomId: string): Promise<Response> {
+  const credentials = await credentialsOf(request, env);
+  if (!credentials) return problem(401, "未登录");
+  if (!isRoomId(roomId)) return problem(404, "频道不存在");
+  const work = workspace(env);
+  const settings = await work.roomSettings(credentials, roomId);
+  if (!settings) return problem(401, "未登录");
+  if (settings === "not found") return problem(404, "频道不可访问");
+  const binding = pulseBinding(env, roomId);
+  if (settings.room.channelGroup !== "project" && !binding) return problem(404, "此频道未启用项目助手");
+  if (request.method === "HEAD") return new Response(null, {status:200,headers});
+  const [page, registered] = await Promise.all([
+    env.CHAT_ROOM.getByName(roomId).projectMessages(roomId, {}),
+    binding ? null : work.teamProjectBindings([roomId]),
+  ]);
+  const messages = page.messages.filter(m => !m.attachment).map(m =>
+    ({id:m.id,parentId:m.parentId,plainText:m.plainText.slice(0,450)}));
+  return Response.json({roomName:settings.room.name, projectKey:binding?.projectId ?? registered?.[roomId]?.repository, messages},{headers});
+}
+
 export function adoptionExcerpt(text: string): string {
   return text.replace(/\bPULSE(?:BACKGROUND|PR)[a-zA-Z0-9]+\b/g, "")
     .replace(/^【生成的演示讨论 · 依据监控快照】\s*/u, "")

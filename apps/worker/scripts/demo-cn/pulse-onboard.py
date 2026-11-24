@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 import sys
+from urllib.request import urlopen
 import uuid
 
 PULSE = "http://192.168.16.70:4185"
@@ -21,15 +22,10 @@ PENDING = PACKAGE / ".pulse-pending"
 PAIRED_SCOPE = "uploaded-sessions"
 
 
-def approved_sources(*, require_channels=False):
+def approved_sources():
     selection = json.loads((PACKAGE / ".pulse-project-selection.json").read_text(encoding="utf-8-sig"))
     if selection.get("schema_version") != 1 or not selection.get("confirmed_at"):
         raise ValueError("需要先确认项目范围")
-    if require_channels and selection.get("ember_paired") == PAIRED_SCOPE:
-        missing = [project.get("repository") or project["workspace_name"] for project in selection["projects"]
-                   if not project.get("ember_room_id")]
-        if missing:
-            raise ValueError("请先绑定这些项目的 Ember 频道：" + "、".join(missing))
     sources = sorted({str(uuid.UUID(source)) for project in selection["projects"] for source in project["source_ids"]})
     if not sources:
         raise ValueError("没有获准上报的会话")
@@ -96,6 +92,11 @@ def bind_reporting_member(result):
 
 def bind_project_channels():
     approved_sources()
+    with publication_lock():
+        return resolve_project_channels()
+
+
+def resolve_project_channels():
     path = PACKAGE / ".pulse-project-selection.json"
     selection = json.loads(path.read_text(encoding="utf-8-sig"))
     connector = load_connector()
@@ -108,26 +109,41 @@ def bind_project_channels():
     for project in projects:
         repository = project.get("repository")
         try:
-            room_id = project.get("ember_room_id")
-            if room_id:
-                if room_id not in rooms:
-                    raise ValueError("已绑定频道不可访问，请核对授权或频道成员")
-            elif repository and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            saved = project.get("ember_room_id")
+            if repository and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
                 arguments = {"repository": repository}
-                if project.get("project_name"):
-                    arguments["project_name"] = project["project_name"]
-                room = connector.call_tool("create_project_channel", arguments)["room"]
+                match = connector.call_tool("find_project_channel", arguments)
+                if match["status"] == "matched":
+                    room = match["room"]
+                    if room["id"] not in rooms:
+                        raise ValueError("找到的项目频道不在当前可访问列表，请刷新授权后重试")
+                    status = "reused"
+                elif match["status"] == "missing" and not saved:
+                    if project.get("project_name"):
+                        arguments["project_name"] = project["project_name"]
+                    room = connector.call_tool("create_project_channel", arguments)["room"]
+                    status = "resolved"
+                else:
+                    raise ValueError({
+                        "ambiguous": "同一仓库存在多个频道绑定，需由管理员确认",
+                        "forbidden": "当前 Ember 账号无法访问已绑定的频道，或缺少私有频道授权",
+                        "missing": "本地有原频道记录，服务端未确认仓库绑定，请核对后再继续",
+                    }.get(match["status"], "服务端未确认频道绑定"))
+                if room["kind"] not in ("closed", "open"):
+                    raise ValueError("服务端返回了无效的项目频道")
                 room_id = room["id"]
-                project["ember_room_id"] = room_id
-                save = path.with_suffix(".tmp")
-                save.write_text(json.dumps(selection, ensure_ascii=True), encoding="utf-8")
-                save.chmod(0o600)
-                save.replace(path)
+                if room_id != saved:
+                    project["ember_room_id"] = room_id
+                    write_state(path, selection)
+            elif saved and saved in rooms:
+                room_id = saved
+                status = "reused"
             else:
                 raise ValueError("缺少已核实的 GitHub 仓库")
-            results.append({"project": repository, "channel": f"{EMBER}/rooms/{room_id}"})
+            results.append({"project": repository or project["workspace_name"], "room_id": room_id,
+                            "channel": f"{EMBER}/rooms/{room_id}", "status": status})
         except (ValueError, OSError, KeyError, StopIteration) as exc:
-            results.append({"project": repository, "error": str(exc)})
+            results.append({"project": repository or project.get("workspace_name"), "status": "pending", "error": str(exc)})
     return results
 
 
@@ -152,6 +168,36 @@ def reported_project_sessions(project_key, sources):
         sessions.extend(row for row in inventory["sessions"]
                         if row["source_id"].lower() in allowed and row["project_key"].lower() == project_key.lower())
     return project, sessions
+
+
+def verify_projects():
+    approved_sources()
+    selection = json.loads((PACKAGE / ".pulse-project-selection.json").read_text(encoding="utf-8-sig"))
+    with urlopen(PULSE + "/api/v1/dashboard?days=7", timeout=10) as response:
+        dashboard = json.load(response)
+    results = []
+    for project in selection["projects"]:
+        key = project.get("repository") or project["workspace_name"]
+        sources = sorted({str(uuid.UUID(value)) for value in project["source_ids"]})
+        result = {"repository":key, "room_id":project.get("ember_room_id"), "selected_sources":len(sources)}
+        result["partial_sections"] = [
+            table for table, fields in (
+                ("projects", ("full_name",)), ("project_reports", ("project_key",)),
+                ("pulls", ("full_name",)), ("workspace_states", ("workspace_name",)),
+                ("project_usage", ("project_key",)), ("memberships", ("full_name", "workspace_name")),
+                ("sessions", ("full_name", "workspace_name")),
+            )
+            if any(next((row[field] for field in fields if row.get(field)), "").lower() == key.lower()
+                   for row in dashboard.get(table) or [])
+        ]
+        result["dashboard_match"] = bool(result["partial_sections"])
+        results.append(result)
+        try:
+            _, sessions = reported_project_sessions(key, sources)
+            result["reported_sources"] = len({row["source_id"] for row in sessions})
+        except (ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
+            result["inventory_error"] = str(exc)
+    return results
 
 
 def project_snapshot(project_key, sources):
@@ -200,11 +246,14 @@ def publication_lock():
         yield
 
 
-def publish_progress():
+def publish_progress(channels):
     approved_sources()
     selection = json.loads((PACKAGE / ".pulse-project-selection.json").read_text(encoding="utf-8-sig"))
     paired = selection.get("ember_paired") == PAIRED_SCOPE
-    targets = [p for p in selection["projects"] if p.get("ember_room_id") and (paired or p.get("ember_publish") is not False)]
+    verified = {(item["project"], item["room_id"]) for item in channels if "room_id" in item}
+    targets = [p for p in selection["projects"]
+               if (p.get("repository") or p.get("workspace_name"), p.get("ember_room_id")) in verified
+               and (paired or p.get("ember_publish") is not False)]
     if not targets:
         return []
     results = []
@@ -310,9 +359,26 @@ def check_listener(result):
         result["ember_member_listener_error"] = str(exc)
 
 
+def retry_ember(result, *, listener=False):
+    try:
+        result["channels"] = bind_project_channels()
+    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
+        result["ember_binding_error"] = str(exc)
+    try:
+        bind_reporting_member(result)
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
+        result["ember_reporting_member"] = {"status": "pending", "error": str(exc)}
+    try:
+        result["ember_posts"] = publish_progress(result.get("channels", []))
+    except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
+        result["ember_error"] = str(exc)
+    if listener:
+        check_listener(result)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["links", "preflight", "bind-channels", "sync-ember", "start-listener", "prepare", "submit"])
+    parser.add_argument("action", choices=["links", "preflight", "verify-projects", "bind-channels", "sync-ember", "start-listener", "prepare", "submit"])
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--exclude-session-id", type=lambda value: str(uuid.UUID(value)))
     parser.add_argument("--label")
@@ -331,21 +397,14 @@ def main():
                     raise OSError("缺少 Perl 或 curl")
                 subprocess.run([perl, "-MJSON::PP", "-MDigest::SHA", "-e", "1"], check=True, timeout=10)
             result["collector_ready"] = True
-        elif args.action == "bind-channels":
-            result["channels"] = bind_project_channels()
-            if any("error" in channel for channel in result["channels"]):
-                raise ValueError("部分项目频道未绑定，请核对频道权限和仓库归属后重试")
-            bind_reporting_member(result)
-            check_listener(result)
-            result["ember_posts"] = publish_progress()
-        elif args.action == "sync-ember":
-            bind_reporting_member(result)
-            check_listener(result)
-            result["ember_posts"] = publish_progress()
+        elif args.action == "verify-projects":
+            result["projects"] = verify_projects()
+        elif args.action in ("bind-channels", "sync-ember"):
+            retry_ember(result, listener=True)
         elif args.action == "start-listener":
             check_listener(result)
         elif args.action != "links":
-            sources = approved_sources(require_channels=True)
+            sources = approved_sources()
             if args.action == "prepare":
                 PENDING.mkdir(mode=0o700, exist_ok=True)
                 work = PENDING / uuid.uuid4().hex
@@ -358,17 +417,15 @@ def main():
                                          args.label, args.github_login)
             if args.action == "submit":
                 (PENDING / "ember-context-revision").touch()
-                bind_reporting_member(result)
-                try:
-                    result["ember_posts"] = publish_progress()
-                except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
-                    result["ember_error"] = str(exc)
+                retry_ember(result)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
         result["error"] = str(exc)
     binding = result.get("ember_reporting_member", {})
     listener = result.get("ember_member_listener")
     if args.action in ("bind-channels", "sync-ember", "submit", "start-listener"):
         incomplete = []
+        if "ember_binding_error" in result or any("error" in item for item in result.get("channels", [])):
+            incomplete.append("channels")
         if "ember_member_listener_error" in result or (listener and listener not in ("已有监听进程", "监听已启动")):
             incomplete.append("ember_member_listener")
         if binding and binding.get("status") != "bound":

@@ -55,25 +55,35 @@ export async function syncGithubDeliveries() {
   const bot = bots.find(b => b.name === "Pulse 产出同步");
   if (!bot) return;
   const {projects} = await (await ember.request("/api/pulse/projects", {session})).json() as {projects: {roomId: RoomId}[]};
-  for (const {roomId} of projects) {
+  const tokenPath = process.env.PULSE_GH_COMPANY_TOKEN_FILE;
+  const policyPath = process.env.PULSE_GH_PRIVATE_POLICY_FILE;
+  const org = process.env.PULSE_GH_COMPANY_ORG?.toLowerCase();
+  const grants = policyPath && org
+    ? JSON.parse(readFileSync(policyPath,"utf8")) as Record<string,PrivateRepoGrant> : {};
+  const privateRooms = new Map<RoomId, {repo: string; grant: PrivateRepoGrant}>();
+  for (const [repo, grant] of Object.entries(grants)) {
+    if (/^[\w.-]+\/[\w.-]+$/.test(repo) && repo.split("/")[0] === org && grant?.roomId && Array.isArray(grant.memberIds)) {
+      if (privateRooms.has(grant.roomId as RoomId)) throw new Error("Duplicate private GitHub room grant");
+      privateRooms.set(grant.roomId as RoomId, {repo, grant});
+    }
+  }
+  const rooms = new Set([...projects.map(p => p.roomId), ...privateRooms.keys()]);
+  for (const roomId of rooms) {
     try {
       const readProject = async () => ((await (await ember.request("/api/rooms/" + roomId + "/project?audience=room", {session})).json()) as {project:{full_name:string}}).project.full_name;
-      const repo = await readProject();
+      const entry = privateRooms.get(roomId);
+      const repo = entry?.repo ?? await readProject();
       if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) continue;
-      const tokenPath = process.env.PULSE_GH_COMPANY_TOKEN_FILE;
-      const policyPath = process.env.PULSE_GH_PRIVATE_POLICY_FILE;
-      const org = process.env.PULSE_GH_COMPANY_ORG?.toLowerCase();
-      const grant: PrivateRepoGrant | undefined = policyPath && org && repo.toLowerCase().split("/")[0] === org
-        ? (JSON.parse(readFileSync(policyPath,"utf8")) as Record<string,PrivateRepoGrant>)[repo.toLowerCase()] : undefined;
-      const token = grant?.roomId === roomId && tokenPath ? readFileSync(tokenPath,"utf8").trim() : undefined;
+      const grant = entry?.grant;
+      const token = grant && tokenPath ? readFileSync(tokenPath,"utf8").trim() : undefined;
       const metadata = await github("repos/" + repo, token);
-      const publicRepo = metadata.visibility === "public";
+      const publicRepo = metadata.visibility === "public" && !grant;
       const permitted = async () => {
         const settings = await (await ember.request("/api/rooms/" + roomId + "/settings",{session})).json() as RoomSettings;
         const members = settings.people.filter(p => p.member);
         return members.some(p => p.id === bot.id) && (publicRepo || Boolean(token && grant &&
-          settings.room.kind === "closed" && Array.isArray(grant.memberIds) && members.every(p => grant.memberIds.includes(p.id)))) &&
-          (await readProject()).toLowerCase() === repo.toLowerCase();
+          settings.room.kind === "closed" && members.every(p => grant.memberIds.includes(p.id)))) &&
+          (entry !== undefined || (await readProject()).toLowerCase() === repo.toLowerCase());
       };
       if (metadata.full_name?.toLowerCase() !== repo.toLowerCase() || !await permitted()) {
         deliveryContexts.delete(roomId);

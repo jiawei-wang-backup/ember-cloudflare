@@ -241,6 +241,24 @@ const BIND_PULSE_DEVICE: Tool = {
   },
 };
 
+function projectRepository(value: unknown): string {
+  if (typeof value !== "string" || value.length > 95 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(value))
+    throw new Refused("Give a confirmed GitHub repository as owner/name.");
+  return value.toLowerCase();
+}
+
+const FIND_PROJECT_CHANNEL: Tool = {
+    name: "find_project_channel",
+    title: "Find a project channel",
+    description: "Looks up a confirmed GitHub repository's Ember channel without making changes.",
+    takes: {repository: {type:"string", description:"The confirmed GitHub repository, owner/name."}},
+    required: ["repository"],
+    async run(env, access, {repository}) {
+      const match = await workspace(env).findOutsideProjectChannel(access, projectRepository(repository));
+      return typeof match === "string" ? {status:match} : {status:"matched",room:shownRoom(match,access.userId)};
+    },
+};
+
 /** The tools a connection allowed to read has. */
 const READING: Tool[] = [
   {
@@ -311,13 +329,12 @@ const CHANNEL_CREATION: Tool[] = [{
   },
   required: ["repository"],
   async run(env, access, {repository, project_name}) {
-    if (typeof repository !== "string" || repository.length > 95 || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repository))
-      throw new Refused("Give a confirmed GitHub repository as owner/name.");
+    const key = projectRepository(repository);
     const projectName = typeof project_name === "string" ? project_name.trim() : undefined;
     if (project_name !== undefined && (!projectName || projectName.length > 48 ||
         !/^\p{Script=Han}/u.test(projectName) || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(projectName)))
       throw new Refused("Give a Chinese project name of up to 48 characters.");
-    const room = await workspace(env).outsideProjectChannel(access, repository.toLowerCase(), projectName);
+    const room = await workspace(env).outsideProjectChannel(access, key, projectName);
     if (room === "forbidden") throw new Refused("Channel creation needs project channel and private room permissions, and permission to create rooms in Ember.");
     if (room === "ambiguous") throw new Refused("More than one project channel uses this repository name.");
     return {room: shownRoom(room, access.userId)};
@@ -350,7 +367,7 @@ export function registerTools(server: McpServer, env: Env, access: OutsideAccess
   for (const { tools, annotations } of access.scopes.flatMap((scope) => TOOLS[scope] ?? [])) {
     const available = tools === SENDING && env.PULSE_TEAM_PROJECT_CHANNELS === "true"
       ? [...tools, CODEX_THINKING, ...(env.PULSE_DEVICE_BIND_TOKEN && access.scopes.includes("create_project_channels") ? [BIND_PULSE_DEVICE] : [])]
-      : tools;
+      : tools === READING && access.scopes.includes("private") ? [...tools, FIND_PROJECT_CHANNEL] : tools;
     for (const { name, title, description, takes, required, run } of available) {
       const inputSchema = fromJsonSchema({ type: "object" as const, properties: takes, required, additionalProperties: false });
       server.registerTool(name, { title, description, inputSchema, annotations }, (given) => answered(run(env, access, given as Record<string, unknown>)));

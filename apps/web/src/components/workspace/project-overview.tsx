@@ -104,6 +104,14 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
         const response = await fetch(url, {signal: controller.signal, credentials: "same-origin", cache: "no-store"});
         if (controller.signal.aborted) return;
         if (response.status === 404 || response.status === 403) {
+          const missing = response.status === 404 && await response.json().catch(() => null);
+          if (controller.signal.aborted) return;
+          if (missing?.code === "project_not_reported") {
+            bound = true;
+            setData(null);
+            setError("项目尚未上报到 Project Pulse");
+            return;
+          }
           bound = false;
           setData(null);
           setError(response.status === 403 ? "没有此项目的数据权限" : "");

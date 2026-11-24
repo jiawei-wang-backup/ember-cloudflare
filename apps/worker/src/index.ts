@@ -1121,6 +1121,8 @@ function apiAction(request: Request, env: Env, pathname: string, background?: (w
   if (pathname === "/api/bootstrap" && request.method === "GET") return () => bootstrap(request, env);
   const pulseRoom = pathname.match(/^\/api\/rooms\/([^/]+)\/project$/);
   if (pulseRoom && request.method === "GET") return () => pulseRoute(request,env,pulseRoom[1]!,background);
+  const assistantContext = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/assistant-context$/);
+  if (assistantContext && ["GET","HEAD"].includes(request.method)) return () => projectAssistantContext(request,env,assistantContext[1]!);
   if (pathname === "/api/pulse/projects" && request.method === "GET") return () => pulseSummaries(request, env, background);
   const feedback = pathname.match(/^\/api\/rooms\/([^/]+)\/project\/feedback(?:\/([a-zA-Z0-9_-]{1,80}))?$/);
   if (feedback && ["GET", "POST", "PATCH"].includes(request.method)) return () => projectFeedbackRoute(request, env, feedback[1]!, feedback[2]);
@@ -1409,5 +1411,5 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 import { pulseBinding, pulseRoute, pulseSummaries } from "./pulse";
-import { pulseCollaboration } from "./pulse-collaboration";
+import { projectAssistantContext, pulseCollaboration } from "./pulse-collaboration";
 import { projectFeedbackRoute } from "./project-feedback";

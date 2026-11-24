@@ -75,13 +75,15 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
   const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft | null>(null);
   // The project endpoint has already authenticated this room and resolved its repository binding.
   const currentProject = projectWorkspace && room.kind !== "direct" ? project : null;
+  const assistantEnabled = projectWorkspace && room.kind !== "direct" &&
+    (room.channelGroup === "project" || Boolean(currentProject?.business));
   const owner = currentProject?.team?.owner;
   const [mentionOwner, setMentionOwner] = useState(false);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
   const [assistantMessage, setAssistantMessage] = useState<Message | null>(null);
   const people = useContext(PeopleContext);
   const ownerProfile = owner && people.get(owner.id);
-  const assistantBot = currentProject?.business ? [...people.values()].find(person => person.role === "bot" && person.name === "项目助手") : undefined;
+  const assistantBot = assistantEnabled ? [...people.values()].find(person => person.role === "bot" && person.name === "项目助手") : undefined;
   const nextAssistantTurn = useRef(0);
   useEffect(() => {setProject(null); setFeedbackDraft(null); setAssistantTurns([]); setAssistantMessage(null);}, [room.id]);
   const visit = useVisit();
@@ -90,7 +92,8 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
     : requestedView === "feedback" || requestedView === "assistant" ? requestedView : "overview";
   const roomPath = `/rooms/${room.id}`;
   const setView = (next: typeof view) => navigate(next === "overview" ? roomPath : `${roomPath}?view=${next}`);
-  const discussion = !currentProject?.business || view === "discussion";
+  const assistantView = assistantEnabled && view === "assistant";
+  const discussion = !assistantView && (!currentProject?.business || view === "discussion");
   const { state, frames, postMessage, postFiles, typing, loadOlder, loadNewer, jump, messageActions, dismissNotice } = useRoom(room.id, me, onSessionChanged, messageId);
   const nameOf = useNameOf();
   const name = roomName(room, me.id, nameOf);
@@ -106,7 +109,9 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
   const deleted = gone || foundGone;
   async function shareProjectAnswer(answer: ProjectQuickAnswer) {
     const address = location.pathname + location.search;
-    const permission = await fetch(`/api${roomPath}/project?audience=room`, {signal: AbortSignal.timeout(8000)});
+    const permission = await fetch(answer.requiresPulseGrant ? `/api${roomPath}/project?audience=room` : `/api${roomPath}/project/assistant-context`, {
+      method: answer.requiresPulseGrant ? "GET" : "HEAD", signal: AbortSignal.timeout(8000),
+    });
     if (permission.status === 403) throw new Error("频道成员未全部获得项目授权，暂不能分享。");
     if (!permission.ok) throw new Error("暂时无法核对分享权限，请重试。");
     if (address !== location.pathname + location.search || deleted || state.offline) throw new Error("频道已切换或连接中断，请重试。");
@@ -165,7 +170,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
   };
 
   return (
-    <ProjectAssistantContext value={currentProject?.business && !deleted ? {bot: assistantBot, askPrivately: message => {
+    <ProjectAssistantContext value={assistantEnabled && !deleted ? {bot: assistantBot, askPrivately: message => {
       setAssistantMessage(message);
       setView("assistant");
     }} : null}>
@@ -190,8 +195,10 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
         {/* Backgrounds run under a landscape phone's notch; the room's contents stay clear of it. */}
         <MainContent className="relative flex min-h-0 min-w-0 flex-col bg-background pr-[env(safe-area-inset-right)] max-md:pl-[env(safe-area-inset-left)]">
           <RoomNotice notice={state.notice} onDismiss={dismissNotice} />
-          <div className={currentProject ? "flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-surface px-3 py-2" : "contents"}>
-          {currentProject?.business && <nav aria-label="项目工作区" className="flex min-w-0 flex-wrap items-center gap-1">{([["discussion", "项目讨论"], ["overview", "项目总览"], ["assistant", "项目助手"], ["feedback", "反馈与落实"]] as const).map(([value, label]) => <button key={value} aria-current={view === value ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => {if (view !== value) setView(value);}}>{label}</button>)}</nav>}
+          <div className={currentProject || assistantEnabled ? "flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-surface px-3 py-2" : "contents"}>
+          {assistantEnabled && <nav aria-label="项目工作区" className="flex min-w-0 flex-wrap items-center gap-1">{([["discussion", "项目讨论"], ["overview", "项目总览"], ["assistant", "项目助手"], ["feedback", "反馈与落实"]] as const)
+            .filter(([value]) => currentProject?.business || value === "discussion" || value === "assistant")
+            .map(([value, label]) => <button key={value} aria-current={value === "discussion" && discussion || view === value ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => {if (view !== value) setView(value);}}>{label}</button>)}</nav>}
           {projectWorkspace && !direct && <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>}
           {owner && <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-message-muted">
             <span>项目负责人</span>
@@ -206,7 +213,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
           {owner === null && <p className="w-full text-xs text-message-muted">原负责人账号已不可用，请用现用账号重新接入项目。</p>}
           </div>
           {currentProject?.business && view === "overview" && <ProjectBusiness roomId={room.id} key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
-          {currentProject?.business && view === "assistant" && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
+          {assistantView && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
             reference={assistantMessage?.roomId === room.id ? {
               text: assistantMessage.plainText || "附件",
               author: nameOf(assistantMessage.creator), link: permalinkOf(assistantMessage),

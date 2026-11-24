@@ -3360,7 +3360,41 @@ export class Workspace extends DurableObject<Env> {
     return this.saveNewRoom(user.id, room);
   }
 
-  /** Creates the private channel for a repository, serializing concurrent onboarding attempts. */
+  /** Looks up the repository before a client makes any change. */
+  async findOutsideProjectChannel(access: OutsideAccess, repository: string): Promise<SharedRoom | "missing" | "forbidden" | "ambiguous"> {
+    if (!access.scopes.includes("private") || !(await this.outsideAi())) return "forbidden";
+    return this.outsideProjectMatch(access, repository);
+  }
+
+  private async outsideProjectMatch(access: OutsideAccess, repository: string): Promise<SharedRoom | "missing" | "forbidden" | "ambiguous"> {
+    const rooms = await this.outsideRooms(access);
+    const shared = this.env.PULSE_TEAM_PROJECT_CHANNELS === "true";
+    if (!shared) {
+      const legacy = rooms.flatMap(room => room.kind === "closed" && room.channelGroup === "project" && room.name.toLowerCase() === `项目 · ${repository}` ? [room] : []);
+      return legacy.length > 1 ? "ambiguous" : legacy[0] ?? "missing";
+    }
+    const prefix = "pulse-project-room:";
+    const ids = new Set<string>();
+    try {
+      const configured = JSON.parse(this.env.PULSE_ROOMS || "{}") as Record<string, {projectId?: string}>;
+      for (const [id, binding] of Object.entries(configured)) if (binding.projectId?.toLowerCase() === repository) ids.add(id);
+    } catch { return "forbidden"; }
+    const registered = await this.ctx.storage.list<string | {repository: string}>({prefix});
+    for (const [key, entry] of registered) {
+      if ((typeof entry === "string" ? entry : entry.repository).toLowerCase() === repository) ids.add(key.slice(prefix.length));
+    }
+    const matching = (await Promise.all([...ids].filter(isRoomId).map(async id => {
+      const kind = await this.store.roomKind(id);
+      return kind === "closed" || kind === "open" ? id : null;
+    }))).filter(id => id !== null);
+    if (matching.length > 1) return "ambiguous";
+    const id = matching[0];
+    if (!id) return "missing";
+    const room = rooms.find(candidate => candidate.id === id && candidate.kind !== "direct");
+    return room && room.kind !== "direct" ? {id:room.id,kind:room.kind,name:room.name,icon:room.icon,channelGroup:"project"} : "forbidden";
+  }
+
+  /** Rechecks the match inside the creation lock so concurrent clients cannot create duplicates. */
   async outsideProjectChannel(access: OutsideAccess, repository: string, projectName?: string): Promise<SharedRoom | "forbidden" | "ambiguous"> {
     return this.oneAtATime(async () => {
       const {userId, connectionId} = access;
@@ -3370,33 +3404,8 @@ export class Workspace extends DurableObject<Env> {
       if (!connections.some(connection => connection.id === connectionId)) return "forbidden";
       const sharedProjects = this.env.PULSE_TEAM_PROJECT_CHANNELS === "true";
       const legacyName = `项目 · ${repository}`;
-      const rooms = (await this.store.roomsFor(userId)).rooms.flatMap(room =>
-        room.kind === "closed" || (sharedProjects && room.kind === "open") ? [room] : []);
-      let configured: Record<string, {projectId?: string}> = {};
-      if (sharedProjects) {
-        try { configured = JSON.parse(this.env.PULSE_ROOMS || "{}"); } catch { return "forbidden"; }
-      }
-      const projectRooms = rooms.filter(room => configured[room.id] || (room.kind === "closed" && room.channelGroup === "project"));
-      const registered = await this.teamProjectBindings(projectRooms.map(room => room.id));
-      const existing = projectRooms.filter(room =>
-        configured[room.id]?.projectId?.toLowerCase() === repository ||
-        (room.channelGroup === "project" && (registered[room.id]?.repository === repository || (!registered[room.id] && room.name.toLowerCase() === legacyName))));
-      if (existing.length > 1) return "ambiguous";
-      if (Object.entries(configured).some(([id, binding]) =>
-        binding.projectId?.toLowerCase() === repository && !existing.some(room => room.id === id))) return "forbidden";
-      const room = existing[0];
-      if (room?.kind === "open") return {...room, channelGroup: "project"};
-      if (room?.kind === "closed") {
-        if (sharedProjects && !configured[room.id]) {
-          const binding = registered[room.id];
-          const settings = binding && await this.store.roomSettings(room.id, userId);
-          const ownerId = binding?.ownerId ?? settings?.creatorId;
-          if (!settings?.people.some(person => person.id === ownerId && person.member)) {
-            await this.ctx.storage.put(`pulse-project-room:${room.id}`, { repository, ownerId: userId });
-          }
-        }
-        return {id: room.id, kind: room.kind, name: room.name, icon: room.icon, channelGroup: "project"};
-      }
+      const match = await this.outsideProjectMatch(access, repository);
+      if (match !== "missing") return match;
       const suffix = `（${repository.split("/")[1]}）`;
       const name = sharedProjects ? `${(projectName || "项目").slice(0, MAX_ROOM_NAME_LENGTH - suffix.length)}${suffix}` : legacyName;
       const memberIds = sharedProjects

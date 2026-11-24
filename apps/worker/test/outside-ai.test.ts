@@ -1134,8 +1134,13 @@ it("uses a Chinese project title and reuses the registered room in the LAN works
   });
   try {
     const repository = "example/MonashMate";
-    const first = await called(token, "create_project_channel", {repository, project_name: "校园政策问答"});
+    expect(await found(token, "find_project_channel", {repository})).toEqual({status:"missing"});
+    const [first, concurrent] = await Promise.all([
+      called(token, "create_project_channel", {repository, project_name: "校园政策问答"}),
+      called(token, "create_project_channel", {repository, project_name: "校园政策问答"}),
+    ]);
     expect(first.isError).toBeFalsy();
+    expect(concurrent.text).toEqual(first.text);
     expect(JSON.parse(first.text).room.name).toBe("校园政策问答（monashmate）");
     const roomId = JSON.parse(first.text).room.id;
     expect((await workspaceStub().teamProjectBindings([roomId]))[roomId]).toEqual({
@@ -1151,18 +1156,24 @@ it("uses a Chinese project title and reuses the registered room in the LAN works
 it("reuses an explicitly bound open project channel", async () => {
   const { member, administrator } = await setUpOn();
   const room = await createRoom("Existing project", {as: administrator});
+  const hidden = await createRoom("Another private project", {as: administrator, closedTo:[administrator.user.id]});
   const token = (await connected(member, {scope:"read write private create_project_channels"}, [], ["private", "create_project_channels"])).tokens.access_token;
-  const original = await runInDurableObject(workspaceStub(), instance => {
+  const original = await runInDurableObject(workspaceStub(), async (instance, state) => {
     const object = instance as unknown as {env: Env};
     const original = object.env;
     object.env = {...original, PULSE_TEAM_PROJECT_CHANNELS:"true",
       PULSE_ROOMS:JSON.stringify({[room.id]:{projectId:"example/existing"}})};
+    await state.storage.put(`pulse-project-room:${hidden.id}`, {repository:"example/hidden",ownerId:administrator.user.id});
     return original;
   });
   try {
+    const lookup = await found<{status:string;room:{id:string;kind:string}}>(token, "find_project_channel", {repository:"example/existing"});
+    expect(lookup).toMatchObject({status:"matched",room:{id:room.id,kind:"open"}});
     const result = await found<{room:{id:string;kind:string}}>(token, "create_project_channel", {repository:"example/existing"});
     expect(result.room).toMatchObject({id:room.id,kind:"open"});
     expect((await roomsFor(token)).filter(r => r.name === "Existing project")).toHaveLength(1);
+    expect(await found(token, "find_project_channel", {repository:"example/hidden"})).toEqual({status:"forbidden"});
+    expect((await called(token, "create_project_channel", {repository:"example/hidden"})).isError).toBe(true);
   } finally {
     await runInDurableObject(workspaceStub(), instance => void ((instance as unknown as {env: Env}).env = original));
   }

@@ -44,5 +44,18 @@ it("supports workspace-only projects without inventing repository UUIDs or zero 
   expect(data.activities[0]?.summary).toBe("恢复入口");
   expect(data.usage.input_tokens).toBeNull();
   expect(data.pulls).toEqual([]);
-  expect(() => dashboardProject(dashboard(), "other/absent", 7, "LAN")).toThrow("身份不匹配");
+  expect(() => dashboardProject(dashboard(), "other/absent", 7, "LAN")).toThrow("项目尚未上报");
+});
+
+it("shows session-only projects without inventing a project report", () => {
+  const source = dashboard();
+  source.memberships.push({full_name:null, workspace_name:"example/session-only", display_name:"上报人",
+    session_count:16, last_activity_at:"2026-11-16"});
+  source.project_usage.push({project_key:"example/session-only",input_tokens:"12",output_tokens:"3"});
+  const data = dashboardProject(source,"example/session-only",7,"LAN");
+  expect(data.project).toMatchObject({full_name:"example/session-only",repository_id:null});
+  expect(data.members[0]?.sessions).toBe(16);
+  expect(data.usage.input_tokens).toBe("12");
+  expect(data.latest_report).toBeNull();
+  expect(data.milestone_progress).toBeNull();
 });
