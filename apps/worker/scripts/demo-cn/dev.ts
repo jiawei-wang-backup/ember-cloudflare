@@ -15,6 +15,7 @@ import {handleProjectAssistantChat} from "./project-assistant-chat.ts";
 import { handleDemoBot } from "./demo-bot.ts";
 import { people } from "./data.ts";
 import { companyPilotLedger, companyPilotRepo, pilotRepo, syncPilotPRs } from "./pr-pilot.ts";
+import {openReporting} from "./reporting-service.ts";
 
 // The Worker stays on loopback; --lan exposes only the application proxy with the same demo state.
 const root = path.resolve(import.meta.dirname, "../../../..");
@@ -54,7 +55,8 @@ const headersOf = (req: http.IncomingMessage) => {
   return headers;
 };
 mkdirSync(state, { recursive: true });
-const clientRelease = "r28";
+const reporting = lan && openReporting(state);
+const clientRelease = "r29";
 const onboardingIdFile = path.join(state, "onboarding-id");
 if (tlsProxyKey && !existsSync(onboardingIdFile)) {
   try {writeFileSync(onboardingIdFile, randomUUID().replaceAll("-", ""), {flag:"wx", mode:0o600});}
@@ -63,9 +65,12 @@ if (tlsProxyKey && !existsSync(onboardingIdFile)) {
 const onboardingId = tlsProxyKey && readFileSync(onboardingIdFile, "utf8").trim();
 if (onboardingId && !/^[a-f0-9]{32}$/.test(onboardingId)) throw new Error("Invalid workspace onboarding identity");
 const clientZip = {file:path.join(root, "docs/lan-client", `project-pulse-report-3.6.0-lan-${clientRelease}.zip`), type:"application/zip"};
+const onboardingBootstrap = new Set(["/onboarding/bootstrap", "/onboarding/client.zip", "/onboarding/Ember-LAN-CA.pem"]);
 const onboardingAssets = new Map([
   ["/onboarding", {file:path.join(import.meta.dirname, "onboarding.html"), type:"text/html; charset=utf-8"}],
   ["/onboarding/client.zip", clientZip],
+  ["/onboarding/bootstrap", {file:path.join(import.meta.dirname, "onboarding-bootstrap.html"), type:"text/html; charset=utf-8"}],
+  ["/onboarding/Ember-LAN-CA.pem", {file:path.join(import.meta.dirname, "Ember-LAN-CA.pem"), type:"application/x-pem-file"}],
   ...["windows", "macos", "linux"].map(platform => [`/onboarding/${platform}.zip`, clientZip] as const),
   ["/onboarding/ember-icon.png", {file:path.join(root, "apps/web/public/logos/app-icon-48.png"), type:"image/png"}],
   ["/onboarding/prompt.txt", {file:path.join(root, "docs/lan-client", `ember-lan-onboarding-${clientRelease}.txt`), type:"text/plain; charset=utf-8"}],
@@ -179,15 +184,22 @@ const handleRequest: http.RequestListener = (req, res) => {
   const {pathname} = address;
   const onboardingAsset = onboardingAssets.get(pathname);
   if (onboardingAsset) {
-    if (!onboardingId || !isTls(req) || !["GET","HEAD"].includes(req.method ?? "") || !existsSync(onboardingAsset.file)) {res.writeHead(404).end(); return;}
+    if (!onboardingId || (!isTls(req) && !onboardingBootstrap.has(pathname)) || !["GET","HEAD"].includes(req.method ?? "") || !existsSync(onboardingAsset.file)) {res.writeHead(404).end(); return;}
     res.writeHead(200, {"Content-Type":onboardingAsset.type, "Cache-Control":"no-store", "X-Content-Type-Options":"nosniff",
       "Content-Security-Policy":"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
-      ...(pathname.endsWith(".zip") && {"Content-Disposition":`attachment; filename="${path.basename(onboardingAsset.file)}"`})});
+      ...((pathname.endsWith(".zip") || pathname.endsWith(".pem")) && {"Content-Disposition":`attachment; filename="${path.basename(onboardingAsset.file)}"`})});
     if (req.method === "HEAD") res.end();
     else createReadStream(onboardingAsset.file).on("error", () => res.destroy()).pipe(res);
     return;
   }
-  if (pathname.startsWith("/project-pulse/")) {servePulsePreview(req, res, address); return;}
+  if (pathname.startsWith("/project-pulse/")) {
+    if (reporting && isTls(req)) {void reporting.view(req,res,address,headersOf(req)); return;}
+    servePulsePreview(req,res,address); return;
+  }
+  if (reporting && pathname.startsWith("/api/v1/") && (isTls(req) || loopback(req.socket.remoteAddress))) {
+    reporting.report(req,res,address,!isTls(req) && loopback(req.socket.remoteAddress));
+    return;
+  }
   if (pathname === "/api/demo-session") {void demoSignIn(req, res); return;}
   if (["GET", "HEAD"].includes(req.method || "") && (staticPrefixes.some(prefix => pathname.startsWith(prefix)) || ["/ember-icon.png", "/app-version.json", "/globe.svg"].includes(pathname))) {void staticAsset(req, res); return;}
   const upstream = http.request({ hostname: "127.0.0.1", port: 8790, path: req.url, method: req.method, headers: headersOf(req) }, (answer) => {
@@ -203,6 +215,9 @@ const handleRequest: http.RequestListener = (req, res) => {
   req.pipe(upstream);
 };
 const server = http.createServer(handleRequest);
+const legacyReports = reporting && reporting.legacyPort && http.createServer((req,res) => {
+  reporting.report(req,res,new URL(req.url || "/",origin));
+});
 const handleUpgrade = (req: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
   if (!loopback(req.socket.remoteAddress) && localPath(req)) {socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"); return;}
   const upstream = net.connect(8790, "127.0.0.1", () => {
@@ -239,9 +254,13 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     if (tlsProxyKey && configured.vars.PULSE_SOURCE === "dashboard" && typeof publicPulse === "string" && URL.canParse(publicPulse)) {
       const dashboard = new URL(publicPulse);
       if (dashboard.protocol === "http:" && dashboard.port && !dashboard.username && !dashboard.password) {
-        pulsePreviewPort = Number(dashboard.port);
+        if (!reporting) pulsePreviewPort = Number(dashboard.port);
         configured.vars.PULSE_EMBER_DASHBOARD_URL = `https://${dashboard.hostname}:5443/project-pulse/`;
       }
+    }
+    if (reporting) {
+      configured.vars.PULSE_URL = "http://127.0.0.1:5174";
+      delete configured.vars.PULSE_TOKEN;
     }
     const deviceBindingKey = path.join(state, "pulse-device-bind-token");
     if (existsSync(deviceBindingKey)) configured.vars.PULSE_DEVICE_BIND_TOKEN = readFileSync(deviceBindingKey, "utf8").trim();
@@ -257,9 +276,25 @@ server.listen(5174, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     writeFileSync(config, JSON.stringify(configured, null, 2), {mode: 0o600});
   }
   if (secureServer) secureServer.listen(5443, "0.0.0.0");
-  const child = spawn(process.execPath, [path.join(root, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--ip", "127.0.0.1", "--port", "8790", "--name", "ember-demo-cn", "-c", existsSync(config)?config:path.join(root, "wrangler.jsonc"), "--persist-to", path.join(state, "state"), "--var", "SESSION_SECRET:demo-cn-local-only", "--var", "EMBER_GUEST_SIGN_IN:false", ...(lan ? ["--var", "DISABLE_SSL:lan-http"] : [])], { cwd: root, stdio: "inherit" });
+  if (legacyReports && reporting) {
+    legacyReports.once("error",error => {console.error("Cannot start Ember reporting compatibility port:",(error as NodeJS.ErrnoException).code); process.exit(1);});
+    legacyReports.listen(reporting.legacyPort!, "0.0.0.0");
+  }
+  const reportingEnv = path.join(state,".dev.vars.ember-reporting");
+  const sharedEnv = path.join(state,".dev.vars");
+  const envFiles: string[] = [];
+  if (reporting) {
+    writeFileSync(reportingEnv,"PULSE_TOKEN="+reporting.internalToken+"\n",{mode:0o600});
+    if (existsSync(sharedEnv)) envFiles.push("--env-file",sharedEnv);
+    envFiles.push("--env-file",reportingEnv);
+  }
+  const child = spawn(process.execPath, [path.join(root, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--ip", "127.0.0.1", "--port", "8790", "--name", "ember-demo-cn", "-c", existsSync(config)?config:path.join(root, "wrangler.jsonc"), "--persist-to", path.join(state, "state"), "--var", "SESSION_SECRET:demo-cn-local-only", "--var", "EMBER_GUEST_SIGN_IN:false", ...envFiles, ...(lan ? ["--var", "DISABLE_SSL:lan-http"] : [])], { cwd: root, stdio: "inherit" });
   child.on("exit", (code) => { server.close(); process.exit(code ?? 1); });
-  for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { child.kill(signal); server.close(); if (secureServer) secureServer.close(); });
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => {
+    child.kill(signal); server.close(); if (secureServer) secureServer.close();
+    if (legacyReports) legacyReports.close();
+    if (reporting) void reporting.close();
+  });
   function startPRPoll(ledger: string, company: boolean) {
     if (!existsSync(ledger)) return;
     const repo = company ? companyPilotRepo : pilotRepo;

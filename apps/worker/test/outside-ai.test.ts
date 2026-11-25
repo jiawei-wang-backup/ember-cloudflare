@@ -1176,7 +1176,8 @@ it("stores project updates without Pulse and publishes each revision only once",
   const directory = "/api/pulse/projects?source=ember";
   expect((await api(directory)).status).toBe(401);
   expect(await (await api(directory, {headers:as(member)})).json()).toEqual({projects:[
-    {roomId:room.id, name:expect.any(String), repository, updated_at:expect.any(String)},
+    {roomId:room.id, name:expect.any(String), repository, owner_name:member.user.name, updated_at:expect.any(String),
+      milestones:milestones.map(({title, state}) => ({title, state}))},
   ]});
   expect(await (await api(directory, {headers:as(administrator)})).json()).toEqual({projects:[]});
   expect(await found(token, "read_project_snapshot", {room_id: room.id})).toMatchObject({

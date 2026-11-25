@@ -212,9 +212,9 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
             .filter(([value]) => currentProject?.business || value === "discussion" || value === "assistant")
             .map(([value, label]) => <button key={value} aria-current={(discussion ? value === "discussion" : view === value) ? "page" : undefined} className="rounded-md px-2.5 py-1.5 text-xs text-message-muted hover:bg-hover aria-[current=page]:bg-hover aria-[current=page]:font-semibold aria-[current=page]:text-message-ink whitespace-nowrap max-md:px-1.5" onClick={() => setView(value)}>{label}</button>)}</nav>}
           {projectWorkspace && !direct && <ProjectOverview key={room.id} roomId={room.id} onData={setProject} compact/>}
-          {(owner || (assistantEnabled && !deleted)) && <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-message-muted">
+          {(owner || (assistantEnabled && !deleted)) && <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-message-muted md:order-1 md:w-auto">
             {owner && <span>负责人 <strong className="font-medium text-message-ink">{owner.name}</strong></span>}
-            {assistantEnabled && !assistantView && !deleted && <button type="button" className="rounded-md border bg-card px-2 py-1 text-link hover:bg-hover" onClick={() => setView("assistant")}>问项目助手</button>}
+            {assistantEnabled && !assistantView && !deleted && <button type="button" className="rounded-md border bg-card px-2 py-1 text-link hover:bg-hover md:hidden" onClick={() => setView("assistant")}>问项目助手</button>}
             {owner && ownerProfile && owner.id !== me.id && !deleted && !state.offline &&
               <button type="button" className="rounded-md border bg-card px-2 py-1 text-message-ink hover:bg-hover" onClick={() => {
                 setMentionOwner(true);
@@ -223,8 +223,8 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
           </div>}
           {owner === null && <p className="w-full text-xs text-message-muted">原负责人账号已不可用，请用现用账号重新接入项目。</p>}
           </div>
-          {currentProject?.business && view === "overview" && <ProjectBusiness roomId={room.id} key={room.id} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
-          {assistantView && <ProjectAssistantChat key={room.id} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
+          {currentProject?.business && view === "overview" && <ProjectBusiness roomId={room.id} key={`overview:${room.id}`} data={currentProject} onDiscussion={() => setView("discussion")} onFeedback={(moduleId, milestoneId) => {setFeedbackDraft({moduleId, milestoneId}); setView("feedback");}} />}
+          {assistantView && <ProjectAssistantChat key={`assistant:${room.id}`} roomId={room.id} turns={assistantTurns} me={me} bot={assistantBot}
             reference={assistantMessage?.roomId === room.id ? {
               text: assistantMessage.plainText || "附件",
               author: nameOf(assistantMessage.creator), link: permalinkOf(assistantMessage),
@@ -232,8 +232,8 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
             onAnswer={answer => {const id = ++nextAssistantTurn.current; setAssistantTurns(turns => [...turns, {...answer, id}]);}}
             onShared={id => setAssistantTurns(turns => turns.map(turn => turn.id === id ? {...turn, shared: true} : turn))}
             onShare={shareProjectAnswer} shareDisabled={deleted || state.offline} onDiscussion={() => setView("discussion")}/>}
-          {currentProject?.business && view === "feedback" && <ProjectFeedbackPanel key={room.id} roomId={room.id} data={currentProject} me={me} draft={feedbackDraft} onDraftHandled={() => setFeedbackDraft(null)} focusId={new URLSearchParams(location.search).get("feedback")}/>}
-          {discussion && !deleted && currentProject?.business && <ProjectDiscussionFollowUp key={room.id} roomId={room.id} onOpen={openFeedback} onTrack={snapshotFollowUp => {
+          {currentProject?.business && view === "feedback" && <ProjectFeedbackPanel key={`feedback:${room.id}`} roomId={room.id} data={currentProject} me={me} draft={feedbackDraft} onDraftHandled={() => setFeedbackDraft(null)} focusId={new URLSearchParams(location.search).get("feedback")}/>}
+          {discussion && !deleted && currentProject?.business && <ProjectDiscussionFollowUp key={`follow-up:${room.id}`} roomId={room.id} onOpen={openFeedback} onTrack={snapshotFollowUp => {
             setFeedbackDraft({moduleId: currentProject.business!.modules.find(module => module.id !== "other")?.id ?? "", snapshotFollowUp});
             setView("feedback");
           }}/>}
@@ -241,7 +241,7 @@ export function RoomView({ room, messageId, threadId, replyId, invitation, onDis
             <h2 className="shrink-0 font-semibold">待跟进</h2>
             <p className="min-w-0 flex-1 break-words text-message-muted">{followUp}</p>
           </section>}
-          {discussion && <ProjectChatTools key={room.id} roomId={room.id} data={currentProject} me={me} actions={deleted ? null : messageActions} editors={editors} onSelectionChange={setSelection} onAdopted={openFeedback}>
+          {discussion && <ProjectChatTools key={`discussion-tools:${room.id}`} roomId={room.id} data={currentProject} me={me} actions={deleted ? null : messageActions} editors={editors} onSelectionChange={setSelection} onAdopted={openFeedback}>
           <MessageList
             roomName={name}
             direct={direct}

@@ -142,5 +142,109 @@ class OnboardingTest(unittest.TestCase):
         connector.check_workspace.assert_not_called()
 
 
+    def test_r28_write_receipt_is_verified_on_upgrade_without_republishing(self):
+        work = self.pending / "r28"
+        work.mkdir(parents=True)
+        revision = "a" * 32
+        repository = "example/project"
+        queued = work / "ember-queued.json"
+        queued.write_text(json.dumps({
+            "updates": {repository: {"revision": revision, "observedAt": "2026-11-25T00:00:00.000Z", "facts": {"goal": "fixture"}}},
+            "receipts": {repository: {"status": "published", "revision": revision}},
+        }))
+        connector = Mock(ORIGIN="https://ember.example")
+        connector.call_tool.side_effect = [OSError("network interrupted")] * 3
+        with patch.object(onboard, "load_connector", return_value=connector), patch.object(onboard.time, "sleep"):
+            channels = [{"project": repository, "room_id": "existing"}]
+            result = onboard.publish_progress(channels)
+            self.assertEqual(result[0]["readback_status"], "pending")
+            connector.call_tool.reset_mock(side_effect=True)
+            connector.call_tool.return_value = {"snapshot": {"revision": revision, "peer_confirmed": False}}
+            self.assertEqual(onboard.publish_progress(channels)[0]["readback_status"], "verified")
+            connector.call_tool.assert_called_once_with("read_project_snapshot", {"room_id": "existing"})
+            self.assertEqual(onboard.publish_progress(channels), [])
+        self.assertEqual(json.loads(queued.read_text())["readbacks"][repository]["readback_status"], "verified")
+
+    def test_cycle_recovers_finished_draft_and_isolates_corrupt_queue(self):
+        bad = self.pending / "broken"
+        good = self.pending / "interrupted"
+        bad.mkdir(parents=True)
+        good.mkdir()
+        (bad / "ember-queued.json").write_text("{")
+        (good / "ember-projects.json").write_text('[{"repository":"example/project","goal":"fixture"}]')
+        connector = Mock(ORIGIN="https://ember.example")
+        revision = None
+        def respond(name, payload):
+            nonlocal revision
+            if name == "sync_project_snapshot":
+                revision = json.loads(payload["update_json"])["revision"]
+                return {"revision": revision, "status": "published"}
+            return {"snapshot": {"revision": revision, "peer_confirmed": False}}
+        connector.call_tool.side_effect = respond
+        with (
+            patch.object(onboard, "verify_package"),
+            patch.object(onboard, "load_connector", return_value=connector),
+            patch.object(onboard, "bind_project_channels", return_value=[{"project":"example/project", "room_id":"existing"}]),
+            patch.object(onboard, "collector") as collector,
+        ):
+            status, result = self.run_command("cycle", "--ember-only")
+            self.assertEqual(status, 2)
+            self.assertEqual({entry["status"] for entry in result["ember_posts"]}, {"quarantined", "published"})
+            self.assertEqual((next(bad.glob("ember-queued.invalid-*.json"))).read_text(), "{")
+            self.assertTrue((self.pending / "last-cycle.json").is_file())
+            self.assertEqual(self.run_command("cycle", "--ember-only")[0], 0)
+            self.assertEqual(connector.call_tool.call_count, 2)
+            collector.assert_not_called()
+
+    def test_cycle_overlap_returns_partial_without_touching_queue(self):
+        with onboard.file_lock(self.pending / "report-cycle.lock"), patch.object(onboard, "verify_package"):
+            status, result = self.run_command("cycle")
+        self.assertEqual(status, 2)
+        self.assertIn("already_running", result["incomplete"])
+        self.assertFalse((self.pending / "last-cycle.json").exists())
+
+    def test_failed_preflight_is_not_success(self):
+        with (
+            patch.object(onboard, "verify_package", return_value=1),
+            patch.object(onboard, "onboarding_preflight", side_effect=lambda result, *_: result.update(next="login")),
+            patch.object(onboard, "inspect_pulse", return_value={"status": "unavailable"}),
+            patch.object(onboard, "collector", side_effect=OSError("not installed")),
+            patch.object(onboard.sys, "platform", "win32"),
+            patch.object(onboard, "load_connector"),
+        ):
+            status, result = self.run_command("preflight")
+        self.assertEqual(status, 2)
+        self.assertEqual(set(result["incomplete"]), {"collector", "pulse_connectivity", "login"})
+
+
+    def test_cycle_continues_usage_when_ember_authorization_expires(self):
+        draft = self.pending / "old-draft"
+        draft.mkdir(parents=True)
+        (draft / "ember-projects.json").write_text('[{"repository":"example/project","goal":"fixture"}]')
+
+        def collect(action, work, *_):
+            if action == "Prepare":
+                work.mkdir()
+                (work / "plan.json").write_text("{}")
+                return {"prepared_batches": 1, "evidence": ["fixture evidence"]}
+            self.assertEqual(action, "Submit")
+            return {"submitted_batches": 1, "usage_verified": True}
+
+        with (
+            patch.object(onboard, "verify_package"),
+            patch.object(onboard, "load_connector"),
+            patch.object(onboard, "bind_project_channels", side_effect=ValueError("Ember authorization expired")),
+            patch.object(onboard, "collector", side_effect=collect) as collector,
+            patch.object(onboard, "bind_reporting_member"),
+        ):
+            status, result = self.run_command("cycle")
+        self.assertEqual(status, 2)
+        self.assertIn("channels", result["incomplete"])
+        self.assertEqual(result["report"]["submitted_batches"], 1)
+        self.assertNotIn("evidence", result["prepared"])
+        self.assertTrue((draft / "ember-queued.json").is_file())
+        self.assertEqual([call.args[0] for call in collector.call_args_list], ["Prepare", "Submit"])
+
+
 if __name__ == "__main__":
     unittest.main()

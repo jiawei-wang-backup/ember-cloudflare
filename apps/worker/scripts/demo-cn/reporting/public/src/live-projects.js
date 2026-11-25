@@ -1,0 +1,63 @@
+export const researchProjectCount = projects => projects.filter(project=>['on_track','blocked'].includes(project.status)).length;
+
+export function splitDeferredPanels(panels) {
+  return {
+    active: panels.filter(panel=>!panel.empty),
+    deferred: panels.filter(panel=>panel.empty)
+  };
+}
+
+export const adaptiveColumnsClass = visiblePanels => `live-columns${visiblePanels === 1 ? ' is-single' : ''}`;
+
+export function isRunningAgent(agent,now=Date.now()) {
+  if(!agent) return false;
+  const age=now-Date.parse(agent.last_activity_at);
+  if(!Number.isFinite(age)||age<0) return false;
+  if(agent.state==='running') return age<=2*3600000;
+  return agent.state==='unknown' && agent.is_running===true && age<=30*60000;
+}
+
+export const memberKey = row => row.member_key ?? row.developer_id ?? row.display_name;
+
+export function memberProjectKeys(data,member,projectKey,key='') {
+  const rows=[...(data.memberships||[]),...(data.sessions||[])].filter(row=>memberKey(row)===member);
+  const names=[...new Set(rows.map(projectKey).filter(Boolean))];
+  return key ? names.filter(project=>project===key) : names;
+}
+
+export function renderProjectDocuments(items,{esc,icon,date,projectName,safeGithub}) {
+  const groups=new Map();
+  for(const row of items) {
+    const key=row.full_name||'未关联项目';
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(row);
+  }
+  return [...groups].map(([name,rows],index)=>`<details class="live-session-group live-doc-group" ${index===0?'open':''}>
+    <summary><span class="live-session-group-name">${icon('folder')}<strong>${esc(projectName(name))}</strong><span class="section-count">${rows.length}</span></span><span class="live-session-group-latest">${rows.filter(row=>row.is_draft).length} 份草稿</span>${icon('down','live-session-group-chevron')}</summary>
+    <div class="live-doc-rows">${rows.map(row=>{
+      const link=safeGithub(row.url),label=`${row.repository_full_name ? row.repository_full_name+' ' : ''}#${row.number} ${row.title}`;
+      const state={open:'开放中',closed:'已关闭',merged:'已合并'}[row.state]||row.state||'—';
+      return `<div class="live-doc-row"><span class="live-doc-icon">${icon('document')}</span><div><strong>${link?`<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`:esc(label)}</strong><span>${esc(state)}</span></div>${row.is_draft?'<span class="status-badge tone-amber">草稿</span>':''}<time>${date(row.updated_at)}</time></div>`;
+    }).join('')}</div></details>`).join('');
+}
+export function mergeEmberProjects(pulse, ember) {
+  const result = new Map(pulse.map(project => [project.full_name.toLowerCase(), project]));
+  for (const item of ember) {
+    const key = item.repository.toLowerCase();
+    const project = result.get(key);
+    result.set(key, {...project, full_name:project?.full_name ?? item.repository,
+      status:item.status ?? project?.status, ember:item});
+  }
+  return [...result.values()];
+}
+
+export function mergeEmberDocuments(reported, projects) {
+  const identity = row => (row.url || ((row.repository_full_name || row.full_name) + '#' + row.number)).toLowerCase();
+  const result = new Map(reported.map(row => [identity(row), row]));
+  for (const project of projects) {
+    for (const pull of project.pulls ?? []) {
+      result.set(identity(pull), {...pull, full_name:project.repository});
+    }
+  }
+  return [...result.values()].sort((left, right) => (right.updated_at || '').localeCompare(left.updated_at || ''));
+}

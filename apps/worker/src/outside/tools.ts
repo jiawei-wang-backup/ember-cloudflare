@@ -280,7 +280,7 @@ const READ_PROJECT_SNAPSHOT: Tool = {
       throw new Refused(NO_ROOM);
     const receipt = env.EMBER_LAN_WORKSPACE_ID
       ? await env.CHAT_ROOM.getByName(room.id).onboardingReceipt(room.id, stored.revision, access.userId) : null;
-    return {snapshot: {repository: stored.repository, updatedAt: stored.updatedAt, facts: stored.facts,
+    return {snapshot: {repository: stored.repository, updatedAt: stored.updatedAt, observedAt: stored.observedAt, facts: stored.facts,
       ...(receipt && {revision:stored.revision, peer_confirmed:receipt.peer_confirmed})}};
   },
 };

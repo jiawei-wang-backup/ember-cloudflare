@@ -64,54 +64,38 @@ export function ProjectQuickLook({data, onDiscussion}: {data: PulseSnapshot; onD
   const trial = trialAddress(sections.get("试用入口") ?? monitor ?? "");
   const owner = data.project.owner_basis !== "participants" && data.project.owner?.display_name;
   const participants = [...new Set(data.members.map(member => displayName(member.display_name)).filter(Boolean))];
+  const highlights = [
+    {label: "可用情况", text: sections.get("可用情况") || "正式环境可用情况待确认"},
+    {label: "当前卡点", text: sections.get("当前卡点") || pending[0] || "暂无已上报的卡点"},
+    {label: "下一步", text: sections.get("下一步") || "待负责人确认"},
+  ];
   return (
     <section aria-label="项目速览" className="rounded-xl border bg-card p-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 className="text-base font-semibold">项目速览</h2>
         {["on_track", "blocked", "paused", "completed"].includes(data.project.status) && <PulseStatusBadge value={data.project.status}/>}
+        {trial && <a className="rounded-md border px-2.5 py-1 text-xs font-medium text-link hover:bg-hover md:ml-auto" href={trial} target="_blank" rel="noopener noreferrer">{sections.has("试用入口") ? "打开试用入口 ↗" : "打开局域网监控面板 ↗"}</a>}
       </div>
-      <dl className="mt-3 grid gap-x-6 gap-y-3 text-sm leading-relaxed sm:grid-cols-2">
-        <div>
-          <dt className="font-medium">这个项目做什么</dt>
-          <dd className="mt-0.5 text-message-muted">{introduction?.purpose || data.introduction?.background || data.project.goal || "暂无项目介绍"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium">现在能用什么</dt>
-          <dd className="mt-0.5 text-message-muted">{sections.get("可用情况") || "正式环境可用情况待确认"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium">最近交付</dt>
-          <dd className="mt-0.5 text-message-muted">{sections.get("最近交付") || accepted.slice(0, 2).join("；") || "暂无已核实的交付摘要"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium">当前卡点</dt>
-          <dd className="mt-0.5 text-message-muted">{sections.get("当前卡点") || pending[0] || "暂无已上报的卡点"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium">下一步</dt>
-          <dd className="mt-0.5 text-message-muted">{sections.get("下一步") || "待负责人确认"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium">去哪试</dt>
-          <dd className="mt-0.5 text-message-muted">{trial
-            ? <a className="text-link hover:underline" href={trial} target="_blank" rel="noopener noreferrer">{sections.has("试用入口") ? "打开试用入口 ↗" : "打开局域网监控面板 ↗"}</a>
-            : "试用入口待确认"}</dd>
-        </div>
-        <div>
-          <dt className="font-medium">遇到问题找谁</dt>
-          <dd className="mt-0.5 text-message-muted">
-            {owner ? `可问负责人 ${displayName(owner)} · ` : participants.length ? `可先问参与成员 ${participants.slice(0, 2).join("、")} · ` : ""}
-            <button type="button" className="text-link hover:underline" onClick={onDiscussion}>到项目讨论提问</button>
-          </dd>
-        </div>
+      <dl className="mt-3 grid gap-2 md:grid-cols-3">
+        {highlights.map(({label, text}) => <div key={label} className="min-w-0 rounded-lg border bg-surface px-3 py-2.5">
+          <dt className="text-xs font-semibold">{label}</dt>
+          <dd className="mt-1 break-words text-sm leading-relaxed text-message-muted">{text}</dd>
+        </div>)}
       </dl>
-      {data.fetched_at && <p className="mt-3 text-xs text-message-muted">{reported && "进度条统计阶段记录 · "}更新于 <time dateTime={data.fetched_at}>{new Date(data.fetched_at).toLocaleString("zh-CN", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"})}</time></p>}
-      {details.length > 0 && <details className="mt-3 border-t pt-2 text-sm">
-        <summary className="cursor-pointer font-medium">详细记录</summary>
-        <ul className="mt-1 list-inside list-disc space-y-1 text-message-muted">
-          {details.map((note, index) => <li key={index}><MessageBody nodes={displayBody(bodyFromPlainText(note), note, location.hostname)} mentions={[]} className="inline"/></li>)}
-        </ul>
-      </details>}
+      <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2 text-xs">
+        <details className="min-w-0 flex-1">
+          <summary className="cursor-pointer font-medium">详细记录</summary>
+          <dl className="mt-2 grid gap-x-4 gap-y-2 leading-relaxed md:grid-cols-3">
+            <div><dt className="font-medium">项目用途</dt><dd className="text-message-muted">{introduction?.purpose || data.introduction?.background || data.project.goal || "暂无项目介绍"}</dd></div>
+            <div><dt className="font-medium">最近交付</dt><dd className="text-message-muted">{sections.get("最近交付") || accepted.slice(0, 2).join("、") || "暂无已核实的交付摘要"}</dd></div>
+            <div><dt className="font-medium">遇到问题找谁</dt><dd className="text-message-muted">{owner ? `可问负责人 ${displayName(owner)} · ` : participants.length ? `可先问参与成员 ${participants.slice(0, 2).join("、")} · ` : ""}<button type="button" className="text-link hover:underline" onClick={onDiscussion}>到项目讨论提问</button></dd></div>
+          </dl>
+          {details.length > 0 && <ul className="mt-2 list-inside list-disc space-y-1 text-message-muted">
+            {details.map((note, index) => <li key={index}><MessageBody nodes={displayBody(bodyFromPlainText(note), note, location.hostname)} mentions={[]} className="inline"/></li>)}
+          </ul>}
+        </details>
+        {data.fetched_at && <p className="text-message-muted">{reported && "进度条统计阶段记录 · "}更新于 <time dateTime={data.fetched_at}>{new Date(data.fetched_at).toLocaleString("zh-CN", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"})}</time></p>}
+      </div>
     </section>
   );
 }

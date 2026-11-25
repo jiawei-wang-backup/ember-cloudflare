@@ -1,6 +1,7 @@
 """Connect a local Codex CLI to Ember over HTTPS with browser consent."""
 import argparse
 import base64
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -131,19 +132,54 @@ def connect(include_private=False, include_write=False, create_projects=False, o
     save(client, tokens)
 
 
+@contextmanager
+def refresh_file_lock():
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    with (STATE / "oauth-refresh.lock").open("a+b") as lock:
+        deadline = time.monotonic() + 28
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise OSError("另一个进程正在刷新 Ember 授权，本轮稍后重试") from exc
+                time.sleep(0.2)
+        yield
+
+
 def authorized(call, *, refresh=True):
-    current = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
+    try:
+        current = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError("请用本人账号重新授权 Ember，再续传原批次") from exc
     try:
         return call(current["access_token"])
     except HTTPError as error:
         if error.code != 401 or not refresh:
             raise
-    with _REFRESH:
+    with _REFRESH, refresh_file_lock():
         latest = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
         if latest["access_token"] == current["access_token"]:
             client = latest["client_id"]
-            tokens = request("/oauth/token", {"grant_type": "refresh_token", "client_id": client,
-                             "refresh_token": latest["refresh_token"], "resource": RESOURCE}, form=True)
+            try:
+                tokens = request("/oauth/token", {"grant_type": "refresh_token", "client_id": client,
+                                 "refresh_token": latest["refresh_token"], "resource": RESOURCE}, form=True)
+            except HTTPError as exc:
+                if exc.code == 400:
+                    try:
+                        reason = json.load(exc)
+                    except (ValueError, OSError):
+                        reason = None
+                    if isinstance(reason, dict) and reason.get("error") == "invalid_grant":
+                        raise ValueError("Ember 授权已失效，请用本人账号重新授权，再续传原批次") from exc
+                raise
             save(client, tokens)
             latest = tokens
     return call(latest["access_token"])

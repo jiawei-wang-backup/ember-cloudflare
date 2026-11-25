@@ -5,6 +5,7 @@ import { CheckCircle, ClockRotateRight, Group, NavArrowDown, Page, RefreshDouble
 import { cn } from "@/lib/utils";
 import { PulseStatusBadge } from "./pulse-status";
 import {Dialog, DialogContent, DialogTitle, DialogDescription} from "@/components/ui/dialog";
+import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from "@/components/ui/dropdown-menu";
 
 const number = (value: string | null | undefined) => value == null ? "未知" : BigInt(value).toLocaleString("zh-CN");
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString("zh-CN") : "未提供";
@@ -164,10 +165,22 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
   const {input_tokens: input, output_tokens: output} = data.usage;
   const totalTokens = input == null || output == null ? null : (BigInt(input) + BigInt(output)).toString();
   const monitorUrl = monitorProjectUrl(data);
+  const teamMonitor = monitorUrl ? new URL("#/overview", monitorUrl).href : null;
   if (compact) return <Dialog open={expanded} onOpenChange={setExpanded}>
-    <div className="ml-auto flex shrink-0 items-center gap-1.5">
-      {monitorUrl && <a href={monitorUrl} target="_blank" rel="noreferrer" className="whitespace-nowrap rounded-md px-2 py-1.5 text-xs text-message-muted hover:bg-hover hover:text-message-ink">监控面板 ↗</a>}
-    <button className="shrink-0 whitespace-nowrap rounded-md border bg-card px-2.5 py-1.5 text-xs hover:bg-hover" onClick={() => setExpanded(true)}>项目统计</button>
+    <div className="ml-auto flex shrink-0 items-center gap-1.5 md:order-2">
+      <div className="flex items-center gap-1.5 md:hidden">
+        {monitorUrl && <a href={monitorUrl} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap rounded-md px-2 py-1.5 text-xs text-message-muted hover:bg-hover hover:text-message-ink">监控面板 ↗</a>}
+        <button type="button" className="shrink-0 whitespace-nowrap rounded-md border bg-card px-2.5 py-1.5 text-xs hover:bg-hover" onClick={() => setExpanded(true)}>项目统计</button>
+      </div>
+      <div className="hidden md:block">
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger className="flex items-center gap-1 rounded-md border bg-card px-2.5 py-1.5 text-xs hover:bg-hover">数据<NavArrowDown className="size-3" aria-hidden="true"/></DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => setExpanded(true)}>本项目统计</DropdownMenuItem>
+            {teamMonitor && <DropdownMenuItem asChild><a href={teamMonitor} target="_blank" rel="noopener noreferrer">团队监控面板 ↗</a></DropdownMenuItem>}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
     <DialogContent className="flex h-[min(85dvh,680px)] min-h-0 flex-col sm:max-w-3xl"><DialogTitle>项目统计与原始依据</DialogTitle><DialogDescription className="sr-only">项目用量、成员及产出</DialogDescription>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span>参与成员：{ownerLabel}</span><div className="flex items-center gap-2"><select aria-label="项目统计时间窗" className="rounded border bg-card px-2 py-1" value={days} onChange={e => setDays(Number(e.target.value))}><option value={1}>近 1 天</option><option value={7}>近 7 天</option><option value={30}>近 30 天</option></select><button className="rounded border px-2 py-1 hover:bg-hover" disabled={loading} onClick={() => setRevision(n => n + 1)}>刷新统计</button></div></div>
@@ -177,6 +190,7 @@ export function ProjectOverview({roomId, onData, compact = false}: {roomId: stri
         <Metric label="待处理 PR" value={String(data.pulls.filter(p => p.state === "open").length)} note={`共 ${data.pulls.length} 份产出`}/>
         <Metric label="阶段记录完成" value={progress ? `${progress.completed ?? progress.accepted}/${progress.total}` : "未配置"} note="采集记录，非业务验收"/>
       </div>
+      {monitorUrl && <a href={monitorUrl} target="_blank" rel="noopener noreferrer" className="self-start text-xs text-link hover:underline">在监控面板查看本项目 ↗</a>}
       <ProjectDetails data={data}/>
     </DialogContent>
   </Dialog>;

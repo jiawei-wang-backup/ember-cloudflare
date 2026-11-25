@@ -110,18 +110,18 @@ export function ProjectBusiness({roomId, data, onFeedback, onDiscussion}: {
   return <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 max-md:px-3 max-md:py-3" aria-label="业务项目总览">
     <div className="mx-auto max-w-5xl space-y-5">
       <ProjectQuickLook data={data} onDiscussion={onDiscussion}/>
-      <section aria-label="业务模块">
-        <h2 className="mb-2 text-base font-semibold">业务模块</h2>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          {business.modules.map(module => <BusinessModuleTile key={module.id} module={module} onFeedback={onFeedback}/>)}
-        </div>
-      </section>
       <section id="project-milestones" className="rounded-xl border bg-card p-4" aria-label="项目里程碑进度">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-semibold">项目里程碑进度</h2>
           {progress && progress.total > 0 && <span className="text-sm tabular-nums text-message-muted">{progress.basis === "reported" ? "阶段记录完成" : "里程碑验收"} {completed}/{progress.total}{completed < progress.total && ` · ${progress.total - completed} 项待确认`}</span>}
         </div>
         <MilestonePipeline roomId={roomId} stages={projectStages}/>
+      </section>
+      <section aria-label="业务模块">
+        <h2 className="mb-2 text-base font-semibold">业务模块</h2>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          {business.modules.map(module => <BusinessModuleTile key={module.id} module={module} onFeedback={onFeedback}/>)}
+        </div>
       </section>
       <section className="rounded-xl border bg-card p-4">
         <div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-semibold">项目背景</h2><PulseStatusBadge value={data.project.status}/></div>

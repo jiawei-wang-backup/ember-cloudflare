@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ember 局域网接入下载</title>
+<style>
+  body { background:#f7f6f2; color:#222520; font:16px/1.6 system-ui,sans-serif; margin:0; }
+  main { max-width:38rem; margin:8vh auto; padding:0 1.25rem; }
+  section { padding:1.5rem; border:1px solid #dedfd6; border-radius:16px; background:white; }
+  h1 { margin:0 0 .5rem; font-size:1.65rem; }
+  a { color:#285737; text-underline-offset:3px; }
+  .downloads { display:flex; flex-wrap:wrap; gap:.75rem; }
+  .downloads a { padding:.45rem .75rem; border:1px solid #aac0ad; border-radius:7px; font-weight:650; }
+</style>
+<main>
+  <section>
+    <h1>Ember 局域网接入下载</h1>
+    <p>浏览器提示证书链不完整时，可以先下载接入文件。</p>
+    <div class="downloads">
+      <a href="/onboarding/client.zip" download>下载通用 ZIP</a>
+      <a href="/onboarding/Ember-LAN-CA.pem" download>下载局域网根证书</a>
+    </div>
+    <p>此页只用于下载。使用文件前，请与管理员通过公司渠道提供的 SHA-256 核对。按公司设备要求信任根证书后，再前往 <a href="https://192.168.16.70:5443/onboarding">HTTPS 团队接入页</a>登录和授权。</p>
+  </section>
+</main>
+</html>

@@ -2,6 +2,7 @@
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import errno
 import hashlib
 import os
 import json
@@ -309,17 +310,26 @@ def write_state(path, record):
     temporary.replace(path)
 
 
+class LockBusy(OSError):
+    pass
+
+
 @contextmanager
 def file_lock(path):
     path.parent.mkdir(mode=0o700, exist_ok=True)
     with path.open("a+b") as lock:
-        if sys.platform == "win32":
-            import msvcrt
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK) or getattr(exc, "winerror", None) == 33:
+                raise LockBusy("已有上报在执行，保留批次等待下一轮") from exc
+            raise
         yield
 
 
@@ -342,11 +352,13 @@ def stage_progress(work):
     queue = work / "ember-queued.json"
     if not source.is_file() or queue.is_file():
         return
+    if any(work.glob("ember-queued.invalid-*.json")):
+        raise ValueError("此工作目录有隔离批次，请保留文件并核对版本后修复")
     approved = ember_projects()
     entries = json.loads(source.read_text(encoding="utf-8-sig"))
     if not isinstance(entries, list):
         raise ValueError("ember-projects.json 必须是数组")
-    observed = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    observed = datetime.fromtimestamp(source.stat().st_mtime, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     updates = {}
     for entry in entries:
         raw_repo = entry.get("repository") if isinstance(entry, dict) else None
@@ -360,6 +372,41 @@ def stage_progress(work):
     write_state(queue, {"updates": updates, "receipts": {}})
 
 
+def queue_contents(path):
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict) or not all(isinstance(state.get(key), dict) for key in ("updates", "receipts")):
+        raise ValueError("待发文件结构无效")
+    readbacks = state.setdefault("readbacks", {})
+    if not isinstance(readbacks, dict):
+        raise ValueError("读回记录结构无效")
+    for repo, update in state["updates"].items():
+        if (not isinstance(update, dict) or not re.fullmatch(r"[a-f0-9]{32}", str(update.get("revision", ""))) or
+                not isinstance(update.get("observedAt"), str) or not isinstance(update.get("facts"), dict)):
+            raise ValueError("待发版本无效")
+        receipt = state["receipts"].get(repo)
+        if repo in state["receipts"] and (not isinstance(receipt, dict) or receipt.get("revision") != update["revision"] or
+                                    receipt.get("status") not in ("published", "unchanged", "superseded")):
+            raise ValueError("写入回执无效")
+        readback = readbacks.get(repo)
+        if repo in readbacks and (receipt is None or not isinstance(readback, dict) or
+                                     readback.get("readback_status") not in ("verified", "superseded")):
+            raise ValueError("读回记录无效")
+    return state
+
+
+def retry_request(call):
+    for attempt in range(3):
+        try:
+            return call()
+        except HTTPError as exc:
+            if exc.code not in (408, 500, 502, 503, 504) or attempt == 2:
+                raise
+        except OSError:
+            if attempt == 2:
+                raise
+        time.sleep(2 ** attempt)
+
+
 def publish_progress(channels):
     approved = ember_projects()
     verified = {item["project"].lower(): item["room_id"] for item in channels if "room_id" in item}
@@ -368,11 +415,27 @@ def publish_progress(channels):
         connector = load_connector()
         pending = []
         for path in PENDING.glob("*/ember-queued.json"):
-            state = json.loads(path.read_text(encoding="utf-8"))
-            pending.extend((update["observedAt"], repo, path, update)
-                           for repo, update in state["updates"].items() if repo not in state["receipts"])
+            try:
+                state = queue_contents(path)
+            except (ValueError, UnicodeError) as exc:
+                quarantined = path.with_name(f"ember-queued.invalid-{uuid.uuid4().hex}.json")
+                try:
+                    path.replace(quarantined)
+                except OSError as move_error:
+                    results.append({"status": "pending", "work_dir": str(path.parent), "error": f"无法隔离损坏批次：{move_error}"})
+                    continue
+                results.append({"status": "quarantined", "work_dir": str(path.parent),
+                                "quarantined_file": str(quarantined), "error": f"保留损坏批次：{exc}"})
+                continue
+            except OSError as exc:
+                results.append({"status": "pending", "work_dir": str(path.parent), "error": str(exc)})
+                continue
+            pending.extend((update["observedAt"], repo, path, update, state)
+                           for repo, update in state["updates"].items()
+                           if repo not in state["readbacks"] and state["receipts"].get(repo, {}).get("status") != "superseded")
         blocked = set()
-        for _, repo, path, update in sorted(pending):
+        snapshots = {}
+        for _, repo, path, update, state in sorted(pending, key=lambda item: item[:3]):
             if repo in blocked:
                 continue
             result = {"project": repo, "work_dir": str(path.parent), "revision": update["revision"]}
@@ -382,26 +445,41 @@ def publish_progress(channels):
                 if repo not in approved or not room:
                     raise ValueError("项目范围或频道授权待核实")
                 result["channel"] = f"{EMBER}/rooms/{room}"
-                receipt = connector.call_tool("sync_project_snapshot", {
-                    "room_id": room, "repository": repo, "update_json": json.dumps(update, ensure_ascii=False),
-                })
-                if receipt.get("revision") != update["revision"] or receipt.get("status") not in (
-                    "published", "unchanged", "superseded",
-                ):
-                    raise ValueError("Ember 快照回执不匹配")
-                state = json.loads(path.read_text(encoding="utf-8"))
-                state["receipts"][repo] = receipt
-                write_state(path, state)
+                if repo not in state["receipts"]:
+                    receipt = retry_request(lambda: connector.call_tool("sync_project_snapshot", {
+                        "room_id": room, "repository": repo, "update_json": json.dumps(update, ensure_ascii=False),
+                    }))
+                    if receipt.get("revision") != update["revision"] or receipt.get("status") not in (
+                        "published", "unchanged", "superseded",
+                    ):
+                        raise ValueError("Ember 快照回执不匹配")
+                    state["receipts"][repo] = receipt
+                    write_state(path, state)
+                    snapshots.pop(room, None)
+                receipt = state["receipts"][repo]
                 result.update(receipt)
-                if receipt["status"] != "superseded":
-                    try:
-                        snapshot = connector.call_tool("read_project_snapshot", {"room_id":room})["snapshot"]
-                        if not snapshot or snapshot["revision"] != update["revision"]:
-                            raise ValueError("上报版本已更新，请从 preflight 核对当前快照")
-                        result.update(readback_status="verified", peer_confirmed=snapshot["peer_confirmed"],
-                                      verify_url=f"{EMBER}/onboarding?" + urlencode({"room":room,"revision":snapshot["revision"]}))
-                    except (ValueError, OSError, KeyError, StopIteration) as exc:
-                        result.update(readback_status="pending", readback_error=str(exc))
+                if receipt["status"] == "superseded":
+                    continue
+                try:
+                    if room not in snapshots:
+                        snapshots[room] = retry_request(lambda: connector.call_tool(
+                            "read_project_snapshot", {"room_id": room}))["snapshot"]
+                    snapshot = snapshots[room]
+                    if snapshot and snapshot.get("revision") == update["revision"]:
+                        readback = {"readback_status": "verified", "peer_confirmed": snapshot["peer_confirmed"],
+                                    "verify_url": f"{EMBER}/onboarding?" + urlencode({"room": room, "revision": snapshot["revision"]})}
+                    elif snapshot and snapshot.get("revision") and (
+                        (snapshot.get("observedAt") or snapshot.get("updatedAt") or "", snapshot["revision"]) >
+                        (update["observedAt"], update["revision"])
+                    ):
+                        readback = {"readback_status": "superseded", "current_revision": snapshot["revision"]}
+                    else:
+                        raise ValueError("尚未读到该版本，稍后重新核验")
+                    state["readbacks"][repo] = readback
+                    write_state(path, state)
+                    result.update(readback)
+                except (ValueError, OSError, KeyError, StopIteration) as exc:
+                    result.update(readback_status="pending", readback_error=str(exc))
             except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
                 result.update(status="pending", error=str(exc))
                 blocked.add(repo)
@@ -481,17 +559,52 @@ def retry_ember(result):
         result["ember_error"] = str(exc)
 
 
+def cycle(result, work, sources, args):
+    with file_lock(PENDING / "report-cycle.lock"):
+        # A finished draft is renamed to ember-projects.json by its producer.
+        # Look for drafts left by an interrupted run, including the optional work directory.
+        try:
+            with publication_lock():
+                for draft in sorted(PENDING.glob("*/ember-projects.json")):
+                    if draft.parent != work and any(draft.parent.glob("ember-queued.invalid-*.json")):
+                        continue
+                    try:
+                        stage_progress(draft.parent)
+                    except (ValueError, OSError, KeyError, TypeError) as exc:
+                        result.setdefault("ember_stage_errors", []).append({"work_dir": str(draft.parent), "error": str(exc)})
+        except OSError as exc:
+            result["ember_stage_error"] = str(exc)
+        retry_ember(result)
+        if args.ember_only:
+            return
+        try:
+            # Prepare resumes the existing collector state first. The Python receipt is
+            # reused for explicit work directories that already have a plan.
+            if not work or not (work / "plan.json").is_file():
+                work = PENDING / uuid.uuid4().hex
+                with file_lock(PENDING / "pulse-submission.lock"):
+                    prepared = collector("Prepare", work, sources, args.exclude_session_id, args.label, args.github_login)
+                    result["prepared"] = {key:value for key, value in prepared.items() if key != "evidence"}
+            result["pulse_work_dir"] = str(work)
+            result["report"] = submit_pulse(work, sources)
+        except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
+            result["pulse_error"] = str(exc)
+        bind_reporting_member(result)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["links", "check-package", "preflight", "verify-projects", "bind-channels", "bind-pulse-device", "sync-ember", "start-listener", "prepare", "prepare-ember", "submit", "sync-pulse"])
+    parser.add_argument("action", choices=["links", "check-package", "preflight", "verify-projects", "bind-channels", "bind-pulse-device", "sync-ember", "start-listener", "prepare", "prepare-ember", "submit", "sync-pulse", "cycle"])
     parser.add_argument("--work-dir", type=Path)
+    parser.add_argument("--ember-only", action="store_true", help="cycle 只续传和核验 Ember 项目快照")
     parser.add_argument("--exclude-session-id", type=lambda value: str(uuid.UUID(value)))
     parser.add_argument("--label")
     parser.add_argument("--github-login")
     parser.add_argument("--member", help="用 preflight 核对预期的 Ember 显示名或账号 ID")
     args = parser.parse_args()
-    connector = load_connector()
-    result = {"ember": EMBER, "ember_oauth": connector.ORIGIN, "project_pulse": PULSE, "onboarding": EMBER + "/onboarding"}
+    if args.ember_only and args.action != "cycle":
+        parser.error("--ember-only requires cycle")
+    result = {"operation": args.action, "ember": EMBER, "ember_oauth": EMBER, "project_pulse": PULSE, "onboarding": EMBER + "/onboarding"}
     try:
         if args.action == "check-package":
             result["package_files_verified"] = verify_package()
@@ -499,19 +612,22 @@ def main():
             result["package_files_verified"] = verify_package()
             result["codex_cli"] = bool(shutil.which("codex"))
             result["github_cli"] = bool(shutil.which("gh"))
-            onboarding_preflight(result, connector, args.member)
+            onboarding_preflight(result, load_connector(), args.member)
             result["pulse"] = inspect_pulse()
             try:
                 if sys.platform == "win32":
+                    if not shutil.which("curl.exe"):
+                        raise OSError("缺少 curl.exe")
                     collector("DeviceProof", None, [])
                 else:
-                    perl = shutil.which("perl")
-                    if not perl or not shutil.which("curl"):
-                        raise OSError("缺少 Perl 或 curl")
+                    perl = shutil.which("/usr/bin/perl" if sys.platform == "darwin" else "perl")
+                    if not perl or not shutil.which("curl") or (sys.platform != "darwin" and not shutil.which("sh")):
+                        raise OSError("缺少本机脚本依赖")
                     subprocess.run([perl, "-MJSON::PP", "-MDigest::SHA", "-e", "1"], check=True, timeout=10)
                 result["collector_ready"] = True
-            except (ValueError, OSError, subprocess.SubprocessError):
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 result["collector_ready"] = False
+                result["collector_error"] = str(exc)
         elif args.action == "verify-projects":
             result["projects"] = verify_projects()
         elif args.action == "start-listener":
@@ -523,14 +639,21 @@ def main():
             work = args.work_dir.resolve() if args.work_dir else None
             if work and (work.parent != PENDING.resolve() or not work.is_dir()):
                 raise ValueError("请使用本轮准备上报返回的工作目录")
-            if args.action in ("prepare", "prepare-ember"):
+            if args.action == "cycle":
+                verify_package()
+                try:
+                    cycle(result, work, sources, args)
+                except LockBusy:
+                    result["status"] = "already_running"
+            elif args.action in ("prepare", "prepare-ember"):
                 PENDING.mkdir(mode=0o700, exist_ok=True)
                 work = PENDING / uuid.uuid4().hex
                 result["work_dir"] = str(work)
                 if args.action == "prepare-ember":
                     work.mkdir(mode=0o700)
                 else:
-                    result["report"] = collector("Prepare", work, sources, args.exclude_session_id, args.label, args.github_login)
+                    with file_lock(PENDING / "pulse-submission.lock"):
+                        result["report"] = collector("Prepare", work, sources, args.exclude_session_id, args.label, args.github_login)
             elif args.action in ("bind-channels", "sync-ember", "submit", "sync-pulse"):
                 if args.action in ("submit", "sync-pulse") and not work:
                     raise ValueError("请使用本轮准备上报返回的工作目录")
@@ -558,11 +681,14 @@ def main():
                                "无法确认团队 Ember 工作区，请核对接入地址和客户端版本")
     binding = result.get("ember_reporting_member", {})
     listener = result.get("ember_member_listener")
-    if args.action in ("bind-channels", "bind-pulse-device", "sync-ember", "submit", "sync-pulse", "start-listener"):
-        incomplete = []
+    if args.action in ("bind-channels", "bind-pulse-device", "sync-ember", "submit", "sync-pulse", "start-listener", "cycle"):
+        incomplete = ["already_running"] if result.get("status") == "already_running" else []
         if "pulse_error" in result:
             incomplete.append("pulse")
-        if "ember_stage_error" in result:
+        if args.action == "cycle" and (result.get("report", {}).get("usage_verified") is False or
+                                        result.get("prepared", {}).get("diagnostics", {}).get("recovery_unverified")):
+            incomplete.append("pulse_receipt_unverified")
+        if "ember_stage_error" in result or result.get("ember_stage_errors"):
             incomplete.append("ember_stage")
         if "ember_binding_error" in result or any("error" in item for item in result.get("channels", [])):
             incomplete.append("channels")
@@ -576,11 +702,27 @@ def main():
             incomplete.append("ember_readback")
         if incomplete:
             result["incomplete"] = incomplete
-    if "error" in result or result.get("incomplete") or result.get("collector_ready") is False:
+    if args.action == "preflight" and "error" not in result:
+        incomplete = []
+        if result.get("collector_ready") is False:
+            incomplete.append("collector")
+        if result.get("pulse", {}).get("status") in ("unavailable", "unsupported"):
+            incomplete.append("pulse_connectivity")
+        if result.get("next") != "start_listener_and_schedule":
+            incomplete.append(result.get("next", "workspace"))
+        if incomplete:
+            result["incomplete"] = incomplete
+    if "error" in result or result.get("incomplete"):
         result["recovery"] = {
             "report_to_codex":"提供命令、失败字段和错误信息。不要复制密码、Token 或 OAuth 文件。",
             "retry":"修复指明的问题后重跑原命令。已准备的批次沿用原 work_dir，保留游标和回执。",
         }
+    if args.action == "cycle" and "error" not in result and result.get("status") != "already_running":
+        try:
+            write_state(PENDING / "last-cycle.json", result)
+        except OSError as exc:
+            result.setdefault("incomplete", []).append("cycle_receipt")
+            result["cycle_receipt_error"] = str(exc)
     print(json.dumps(result, ensure_ascii=True))
     return 1 if "error" in result else 2 if result.get("incomplete") else 0
 

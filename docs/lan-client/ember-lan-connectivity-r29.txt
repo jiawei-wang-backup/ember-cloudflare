@@ -1,0 +1,5 @@
+只做连通性检查。打开团队 Ember 接入页 https://192.168.16.70:5443/onboarding 下载 ZIP，核对内置 SHA256SUMS 后运行 python pulse-onboard.py preflight。确认显示团队工作区。如需核对身份，用本人账号运行 python ember-connect.py connect 完成只读授权，再重跑 preflight。Pulse 返回 401 表示接口可达并需要设备授权。 macOS 或 Linux 如果只提供 python3，以下命令中的 python 都用 python3。
+
+验连期间不选项目、不创建频道、不试报、不启动代答或定时任务。只回报工作区、账号与两端的连通性。
+
+退出 2 时查看 next 和 incomplete。只做验连可在确认工作区和连通性后结束，接入状态仍保留为待授权或待确认。

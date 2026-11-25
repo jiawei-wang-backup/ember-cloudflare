@@ -178,8 +178,19 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
   const results = await Promise.all(rooms.map(async ({room, projectId, snapshotRoom, canUsePulse}) => {
     try {
       const local = snapshotRoom && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId ?? null);
-      if (directory) return local ? {roomId:room.id, name:room.name, repository:local.repository,
-        status:local.facts.status, updated_at:local.updatedAt} : null;
+      if (directory) {
+        const repository = local ? local.repository : projectId;
+        if (!repository) return null;
+        const settings = await workspace(env).roomSettings(credentials, room.id);
+        if (!settings || settings === "not found" || !settings.people.some(person => person.member && person.id === user.id)) return null;
+        const ownerId = pulseBinding(env, room.id)?.ownerId ?? teamKeys[room.id]?.ownerId ?? settings.creatorId;
+        const owner = settings.people.find(person => person.member && person.id === ownerId);
+        return {roomId:room.id, name:room.name, repository,
+          owner_name:owner?.name ?? null,
+          status:local ? local.facts.status : undefined, updated_at:local ? local.updatedAt : null,
+          ...(local && {milestones:(local.facts.milestones ?? []).map(({title, state}) => ({title, state}))}),
+          ...(local && local.facts.pulls?.length && {pulls:local.facts.pulls})};
+      }
       const data = local ? projectOverview(local, 7) : projectId && canUsePulse ? await pulseSnapshot(env, projectId, 7, background) : null;
       if (!data) return null;
       return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness};
