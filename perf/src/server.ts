@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -35,9 +35,20 @@ export interface Usage {
 /** Every wrangler we started and every scratch directory we made, so a crash or Ctrl-C leaves neither behind. */
 const running = new Set<ChildProcess>();
 const scratch = new Set<string>();
+const cleanupOptions = {recursive:true, force:true, maxRetries:8, retryDelay:100} as const;
+
+function stopProcess(child: ChildProcess, force = false) {
+  if (process.platform === "win32" && child.pid) {
+    // On Windows killing Wrangler alone leaves workerd holding the SQLite files open.
+    const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+    if (spawnSync(taskkill, ["/pid", String(child.pid), "/t", "/f"], {stdio:"ignore", windowsHide:true}).status === 0) return;
+  }
+  child.kill(force ? "SIGKILL" : "SIGTERM");
+}
+
 process.on("exit", () => {
-  running.forEach((child) => child.kill("SIGTERM"));
-  scratch.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+  running.forEach(child => stopProcess(child));
+  scratch.forEach(dir => rmSync(dir, cleanupOptions));
 });
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
@@ -125,7 +136,7 @@ export async function startServer(storage: Storage, assetsDir?: string): Promise
   const dir = await mkdtemp(path.join(stateRoot, `ember-perf-${storage}-`));
   scratch.add(dir);
   const removeDir = async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, cleanupOptions);
     scratch.delete(dir);
   };
   const state = path.join(dir, "state");
@@ -152,10 +163,9 @@ export async function startServer(storage: Storage, assetsDir?: string): Promise
   const stop = async () => {
     if (child.exitCode === null && child.signalCode === null) {
       const exited = once(child, "exit");
-      child.kill("SIGTERM");
-      const stubborn = setTimeout(() => child.kill("SIGKILL"), 10_000);
-      await exited;
-      clearTimeout(stubborn);
+      stopProcess(child);
+      const stubborn = setTimeout(() => stopProcess(child, true), 10_000);
+      try {await exited;} finally {clearTimeout(stubborn);}
     }
     await removeDir();
   };

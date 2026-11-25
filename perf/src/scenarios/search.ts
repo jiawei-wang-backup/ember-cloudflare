@@ -36,7 +36,9 @@ const FIND_TIMEOUT_MS = 60_000;
 /** Searches as `session`'s person, and answers what it found and how long it took. */
 async function search(server: Server, session: Session, q: string): Promise<{ messages: Message[]; ms: number }> {
   const started = performance.now();
-  const response = await fetch(new URL(`/api/searches?q=${encodeURIComponent(q)}`, server.url), { headers: { Cookie: session.cookie } });
+  const response = await fetch(new URL(`/api/searches?q=${encodeURIComponent(q)}`, server.url), {
+    headers: { Cookie: session.cookie }, signal: AbortSignal.timeout(FIND_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(`Searching for "${q}" failed (${response.status}): ${await response.text()}`);
   const { matches } = (await response.json()) as SearchResults;
   return { messages: matches.map(({ message }) => message), ms: performance.now() - started };
@@ -67,9 +69,14 @@ async function time(server: Server, session: Session, q: string, times: number, 
 
 /** Posts a message and resolves when its sender sees it come back. */
 function post(writer: RoomClient, clientMessageId: string, body: string): Promise<number> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      writer.onMessage = null;
+      reject(new Error(`No acknowledgement for ${clientMessageId}: ${writer.errors.at(-1) ?? "room did not reply"}`));
+    }, 10_000);
     writer.onMessage = (message, at) => {
       if (message.clientMessageId !== clientMessageId) return;
+      clearTimeout(timer);
       writer.onMessage = null;
       resolve(at);
     };

@@ -1,0 +1,4 @@
+# The icon catalog test verifies the original vendor files byte for byte.
+/apps/web/src/components/icons/lucide/LICENSE.txt text eol=lf
+/apps/web/src/components/icons/lucide/catalog.json text eol=lf
+/apps/web/src/components/icons/picker/catalog.json text eol=lf

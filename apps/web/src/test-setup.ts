@@ -5,6 +5,12 @@ import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 import { installMatchMedia, setPrefersDark } from "./test-media";
 
+// The timeline assertions use English labels, independent of the machine running the tests.
+Intl.DateTimeFormat = new Proxy(Intl.DateTimeFormat, {
+  construct: (format, [locales, options], receiver) => Reflect.construct(format, [locales ?? "en-US", options], receiver),
+  apply: (format, receiver, [locales, options]) => Reflect.apply(format, receiver, [locales ?? "en-US", options]),
+});
+
 // Lexxy doesn't keep what's written under jsdom, so the message editor is a stand-in here
 // (components/workspace/__mocks__/rich-text-editor.tsx), and e2e/ tests the real one.
 vi.mock("./components/workspace/rich-text-editor");

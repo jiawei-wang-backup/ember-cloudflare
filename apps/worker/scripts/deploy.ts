@@ -34,6 +34,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,9 +52,11 @@ const UPDATE_WORKFLOW = ".github/workflows/update-ember.yml";
 const BETA_WORKFLOW = ".github/workflows/update-ember-beta.yml";
 const EMBERS_UPDATE_WORKFLOW = new URL("./update-ember.yml", import.meta.url);
 
-/** Runs `pnpm exec wrangler` from the root, with its output captured or shown, and `env` besides this process's. */
+/** Runs the installed Wrangler from the root, with its output captured or shown. */
 function wrangler(args: string[], capture: boolean, env: Record<string, string> = {}) {
-  return spawnSync("pnpm", ["exec", "wrangler", ...args], { cwd: ROOT, encoding: "utf8", stdio: capture ? "pipe" : "inherit", env: { ...process.env, ...env } });
+  const require = createRequire(import.meta.url);
+  const cli = path.join(path.dirname(require.resolve("wrangler/package.json")), "bin", "wrangler.js");
+  return spawnSync(process.execPath, [cli, ...args], { cwd: ROOT, encoding: "utf8", stdio: capture ? "pipe" : "inherit", env: { ...process.env, ...env } });
 }
 
 /** The wrangler options that pick which Worker a command acts on, besides the ones wrangler.jsonc names. */

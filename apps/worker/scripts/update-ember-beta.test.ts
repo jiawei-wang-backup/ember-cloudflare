@@ -2,11 +2,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // The beta workflow, which General's card has a copy add to try betas (docs/self-hosting.md#betas), and Update Ember's.
-const WORKFLOW = readFileSync(new URL("./update-ember-beta.yml", import.meta.url), "utf8");
-const UPDATE_WORKFLOW = readFileSync(new URL("./update-ember.yml", import.meta.url), "utf8");
+const WORKFLOW = readFileSync(new URL("./update-ember-beta.yml", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+const UPDATE_WORKFLOW = readFileSync(new URL("./update-ember.yml", import.meta.url), "utf8").replaceAll("\r\n", "\n");
 const EMBER = "https://github.com/NYLLON-SOFTWARE/ember-cloudflare.git";
 const UPDATE_SCRIPT = "apps/worker/scripts/update-ember.ts";
 
@@ -75,12 +76,14 @@ function fetchFrom(ember: string): string {
   const runnerTemp = mkdtempSync(path.join(dir, "runner-"));
   const script = scriptOf("Fetch Ember's newest update script");
   expect(script).toContain(`ember=${EMBER}\n`);
-  const result = spawnSync("bash", ["-e", "-c", script.replace(`ember=${EMBER}\n`, `ember=file://${ember}\n`)], {
+  // Git for Windows includes the shell used by this Ubuntu workflow.
+  const bash = process.platform === "win32" ? path.resolve(git(dir, "--exec-path"), "../../../bin/bash.exe") : "bash";
+  const result = spawnSync(bash, ["-e", "-c", script.replace(`ember=${EMBER}\n`, `ember="${pathToFileURL(ember).href}"\n`)], {
     cwd: dir,
     encoding: "utf8",
-    env: { ...process.env, ...gitEnv, RUNNER_TEMP: runnerTemp },
+    env: { ...process.env, ...gitEnv, RUNNER_TEMP: runnerTemp.replaceAll("\\", "/") },
   });
-  if (result.status !== 0) throw new Error(`The fetch failed: ${result.stderr}`);
+  if (result.status !== 0) throw new Error(`The fetch failed: ${result.error ?? result.stderr}`);
   return path.join(runnerTemp, "ember");
 }
 

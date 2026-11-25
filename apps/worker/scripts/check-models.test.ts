@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkModels, fileText, makersIdOf, newerModelsOf, reportOf, type ModelsJson } from "./check-models.ts";
+import {mockChildCommand} from "./mock-child-command.ts";
+import {MOCK_GITHUB_CLI} from "./mock-github-cli.ts";
 
 const SCRIPT = fileURLToPath(new URL("./check-models.ts", import.meta.url));
 const MODELS_JSON = fileURLToPath(new URL("../../../models.json", import.meta.url));
@@ -164,7 +166,7 @@ describe("The models check", () => {
   });
 
   it("writes models.json as it's laid out, each model on a line of its own", () => {
-    const text = readFileSync(MODELS_JSON, "utf8");
+    const text = readFileSync(MODELS_JSON, "utf8").replaceAll("\r\n", "\n");
     expect(fileText(JSON.parse(text) as ModelsJson)).toBe(text);
   });
 
@@ -177,16 +179,7 @@ describe("The models check", () => {
 });
 
 /** Stands in for the GitHub CLI, keeping each call it's given, and what it was given to read. */
-const GH = `#!/usr/bin/env bash
-echo "$*" >> "$GH_LOG/calls"
-case "$1 $2" in
-  "pr create") cat > "$GH_LOG/pr-body"; if [ -n "$GH_PR_FAILS" ]; then echo "$GH_PR_FAILS" >&2; exit 1; fi; echo "https://github.com/me/ember/pull/7" ;;
-  "issue create") cat > "$GH_LOG/issue-body"; echo "https://github.com/me/ember/issues/8" ;;
-  "issue edit" | "pr edit") cat > "$GH_LOG/edit-body" ;;
-  "pr list") echo "\${GH_PULLS:-[]}" ;;
-  "issue list") echo "\${GH_ISSUES:-[]}" ;;
-esac
-`;
+
 
 describe("publishing the check, as the Check models workflow does", () => {
   let dir: string;
@@ -205,7 +198,7 @@ describe("publishing the check, as the Check models workflow does", () => {
   function publish(modelsDev: unknown, liteLlm: unknown, more: Record<string, string> = {}) {
     writeFileSync(path.join(dir, "models-dev.json"), JSON.stringify(modelsDev));
     writeFileSync(path.join(dir, "litellm.json"), JSON.stringify(liteLlm));
-    const result = spawnSync(process.execPath, [SCRIPT, "--publish"], { cwd: repo, encoding: "utf8", env: { ...process.env, ...env, ...more } });
+    const result = spawnSync(process.execPath, [...mockChildCommand("gh", path.join(dir, "gh.mjs")), SCRIPT, "--publish"], { cwd: repo, encoding: "utf8", env: { ...process.env, ...env, ...more } });
     return { status: result.status, output: `${result.stdout}${result.stderr}` };
   }
 
@@ -215,12 +208,9 @@ describe("publishing the check, as the Check models workflow does", () => {
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), "check-models-test-"));
     writeFileSync(path.join(dir, "gitconfig"), "[init]\n\tdefaultBranch = main\n");
-    mkdirSync(path.join(dir, "bin"));
     mkdirSync(path.join(dir, "gh"));
-    writeFileSync(path.join(dir, "bin", "gh"), GH);
-    chmodSync(path.join(dir, "bin", "gh"), 0o755);
+    writeFileSync(path.join(dir, "gh.mjs"), MOCK_GITHUB_CLI);
     env = {
-      PATH: `${path.join(dir, "bin")}:${process.env.PATH}`,
       GH_LOG: path.join(dir, "gh"),
       GITHUB_REPOSITORY: "me/ember",
       GIT_CONFIG_GLOBAL: path.join(dir, "gitconfig"),

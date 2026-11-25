@@ -147,5 +147,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // Use the jsdom origin's storage when Node also exposes its own Web Storage.
+    execArgv: process.allowedNodeEnvironmentFlags.has("--no-experimental-webstorage") ? ["--no-experimental-webstorage"] : [],
+    env: { TZ: "UTC" },
+    testTimeout: 15_000,
   },
 });

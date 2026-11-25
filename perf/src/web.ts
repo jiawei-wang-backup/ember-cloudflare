@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { closeAll, joinMany, newRoom, seedRoom } from "./load.ts";
 import type { Profile } from "./profiles.ts";
@@ -17,10 +18,13 @@ export interface WebResults {
   render: RenderResult[];
 }
 
-const webDist = path.resolve(import.meta.dirname, "../../apps/web/dist");
+const webRoot = path.resolve(import.meta.dirname, "../../apps/web");
+const webDist = path.join(webRoot, "dist");
 
 async function buildWeb(): Promise<void> {
-  const child = spawn("pnpm", ["--filter", "@ember/web", "build"], { stdio: ["ignore", "ignore", "inherit"] });
+  const requireFromWeb = createRequire(path.join(webRoot, "package.json"));
+  const vite = path.join(path.dirname(requireFromWeb.resolve("vite/package.json")), "bin/vite.js");
+  const child = spawn(process.execPath, [vite, "build"], { cwd: webRoot, stdio: ["ignore", "ignore", "inherit"] });
   const [code] = (await once(child, "exit")) as [number | null];
   if (code !== 0) throw new Error("Building apps/web failed");
 }

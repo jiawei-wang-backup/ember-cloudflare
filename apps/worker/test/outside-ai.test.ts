@@ -1173,6 +1173,12 @@ it("stores project updates without Pulse and publishes each revision only once",
   ]});
   const otherSidebar = await api("/api/pulse/projects", {headers:as(administrator)});
   expect(await otherSidebar.json()).toMatchObject({projects:[]});
+  const directory = "/api/pulse/projects?source=ember";
+  expect((await api(directory)).status).toBe(401);
+  expect(await (await api(directory, {headers:as(member)})).json()).toEqual({projects:[
+    {roomId:room.id, name:expect.any(String), repository, updated_at:expect.any(String)},
+  ]});
+  expect(await (await api(directory, {headers:as(administrator)})).json()).toEqual({projects:[]});
   expect(await found(token, "read_project_snapshot", {room_id: room.id})).toMatchObject({
     snapshot: {repository, facts: {goal: "Persist work", progress: ["Second delivery"]}},
   });

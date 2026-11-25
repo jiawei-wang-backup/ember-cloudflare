@@ -157,6 +157,7 @@ export async function emberPulseProject(request: Request, env: Env): Promise<Res
 
 export async function pulseSummaries(request: Request, env: Env, background?: BackgroundWork): Promise<Response> {
   const headers = {"Cache-Control": "no-store"};
+  const directory = new URL(request.url).searchParams.get("source") === "ember";
   const credentials = await credentialsOf(request, env);
   if (!credentials) return Response.json({error: "未登录"}, {status: 401, headers});
   const [user, sidebar] = await Promise.all([workspace(env).authenticate(credentials), workspace(env).sidebar(credentials)]);
@@ -177,11 +178,16 @@ export async function pulseSummaries(request: Request, env: Env, background?: Ba
   const results = await Promise.all(rooms.map(async ({room, projectId, snapshotRoom, canUsePulse}) => {
     try {
       const local = snapshotRoom && await env.CHAT_ROOM.getByName(room.id).projectSnapshot(room.id, projectId ?? null);
+      if (directory) return local ? {roomId:room.id, name:room.name, repository:local.repository,
+        status:local.facts.status, updated_at:local.updatedAt} : null;
       const data = local ? projectOverview(local, 7) : projectId && canUsePulse ? await pulseSnapshot(env, projectId, 7, background) : null;
       if (!data) return null;
       return {roomId: room.id, name: room.name, progress: data.milestone_progress, freshness: data.freshness};
     }
-    catch { return {roomId: room.id, name: room.name, progress: null}; }
+    catch (error) {
+      if (directory) throw error;
+      return {roomId: room.id, name: room.name, progress: null};
+    }
   }));
   return Response.json({projects: results.filter(project => project !== null)}, {headers});
 }

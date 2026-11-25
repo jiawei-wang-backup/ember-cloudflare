@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {mockChildCommand} from "./mock-child-command.ts";
+import {MOCK_GITHUB_CLI} from "./mock-github-cli.ts";
 
 const SCRIPT = fileURLToPath(new URL("./update-ember.ts", import.meta.url));
 const WORKFLOW = ".github/workflows/update-ember.yml";
@@ -15,24 +17,7 @@ const WORKFLOW = ".github/workflows/update-ember.yml";
  * it opened, listed as gh lists a workflow's: a pull request from a branch of the copy's own
  * repository, and an issue GitHub Actions opened.
  */
-const GH = `#!/usr/bin/env bash
-echo "$*" >> "$GH_LOG/calls"
-# The value the arguments after the first give the option the first names.
-option() { local name=$1; shift; while [ $# -gt 0 ] && [ "$1" != "$name" ]; do shift; done; echo "$2"; }
-case "$1 $2" in
-  "pr create")
-    cat > "$GH_LOG/pr-body"
-    if [ -n "$GH_PR_FAILS" ]; then echo "$GH_PR_FAILS" >&2; exit 1; fi
-    printf '[{ "url": "https://github.com/me/chat/pull/7", "state": "OPEN", "headRefName": "%s", "isCrossRepository": false }]' "$(option --head "$@")" > "$GH_LOG/pulls"
-    echo "https://github.com/me/chat/pull/7" ;;
-  "issue create")
-    cat > "$GH_LOG/issue-body"
-    printf '[{ "url": "https://github.com/me/chat/issues/8", "state": "OPEN", "title": "%s", "author": { "is_bot": true, "login": "app/github-actions" } }]' "$(option --title "$@")" > "$GH_LOG/issues"
-    echo "https://github.com/me/chat/issues/8" ;;
-  "pr list") echo "\${GH_PULLS:-$(cat "$GH_LOG/pulls" 2>/dev/null || echo "[]")}" ;;
-  "issue list") echo "\${GH_ISSUES:-$(cat "$GH_LOG/issues" 2>/dev/null || echo "[]")}" ;;
-esac
-`;
+
 const PULL_REQUESTS_NOT_PERMITTED = "pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)";
 /** What gh lists of a pull request from a branch of the copy's own repository, and of one from a fork's. */
 const FROM_COPY = { isCrossRepository: false };
@@ -149,7 +134,8 @@ function deployedCopy(ember: string, settings = wrangler("my-chat", "my-files"),
 
 /** Runs the script in `repo` with `args`, fetching Ember from `ember`. */
 function update(repo: string, ember: string, args: string[] = [], env: Record<string, string> = {}) {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, ...gitEnv, EMBER_REPOSITORY: ember, ...env } });
+  const cli = env.GH_LOG ? mockChildCommand("gh", path.join(dir, "gh.mjs")) : [];
+  const result = spawnSync(process.execPath, [...cli, SCRIPT, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, ...gitEnv, EMBER_REPOSITORY: ember, ...env } });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
 
@@ -493,13 +479,10 @@ describe("publishing an update, as the Update Ember workflow does", () => {
     git(dir, ["init", "--quiet", "--bare", origin]);
     git(copy, ["remote", "add", "origin", origin]);
     git(copy, ["push", "--quiet", "origin", "main"]);
-    const bin = path.join(dir, "bin");
     const log = path.join(dir, "gh");
-    mkdirSync(bin);
     mkdirSync(log);
-    writeFileSync(path.join(bin, "gh"), GH);
-    chmodSync(path.join(bin, "gh"), 0o755);
-    const env = { PATH: `${bin}:${process.env.PATH}`, GH_LOG: log, GITHUB_REPOSITORY: "me/chat" };
+    writeFileSync(path.join(dir, "gh.mjs"), MOCK_GITHUB_CLI);
+    const env = { GH_LOG: log, GITHUB_REPOSITORY: "me/chat" };
     const calls = () => readFileSync(path.join(log, "calls"), "utf8").trim().split("\n");
     const body = (command: string) => readFileSync(path.join(log, `${command}-body`), "utf8");
     return { repo, copy, origin, env, calls, body };

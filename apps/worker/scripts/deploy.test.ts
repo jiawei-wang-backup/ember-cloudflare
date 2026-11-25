@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dataOf } from "./jsonc.ts";
+import { mockChildCommand } from "./mock-child-command.ts";
 
 const SCRIPT = fileURLToPath(new URL("./deploy.ts", import.meta.url));
 const SECRET = /^[0-9a-f]{64}$/;
@@ -29,65 +30,69 @@ type Listing = string[] | "no worker" | "error";
  * The Worker's current deployment binds the D1 database $BOUND_D1 as DB, if it's set, unless
  * $DEPLOYMENTS_STATUS says reading it fails.
  */
-const PNPM = `#!/usr/bin/env bash
-[ "$1 $2" = "exec wrangler" ] || { echo "unexpected: $*" >&2; exit 2; }
-shift 2
-echo "$*" >> "$OUT/calls"
-if [ "$1" = "d1" ]; then
-  echo "$*" >> "$OUT/d1-calls"
-  case "$2" in
-    list) echo "\${D1_DATABASES:-[]}" ;;
-    create) echo "Created $3" ;;
-    execute)
-      case "$*" in
-        *sqlite_master*) [ "\${D1_STATE:-fresh}" = fresh ] && echo '[{"results":[]}]' || echo '[{"results":[{"name":"accounts"}]}]' ;;
-        *) [ "$D1_STATE" = "set up" ] && echo '[{"results":[{"set_up":1}]}]' || echo '[{"results":[{"set_up":0}]}]' ;;
-      esac ;;
-    migrations) echo "CI=$CI" >> "$OUT/d1-calls"; exit "\${MIGRATIONS_STATUS:-0}" ;;
-    *) echo "unexpected: $*" >&2; exit 2 ;;
-  esac
-elif [ "$1 $2" = "deployments status" ]; then
-  [ -z "$DEPLOYMENTS_STATUS" ] || { echo "✘ [ERROR] A request to the Cloudflare API failed." >&2; exit 1; }
-  echo '{"versions":[{"version_id":"0a1b2c3d","percentage":100}]}'
-elif [ "$1 $2" = "versions view" ]; then
-  if [ -n "$BOUND_D1" ]; then echo '{"resources":{"bindings":[{"type":"d1","name":"DB","id":"'"$BOUND_D1"'"}]}}'; else echo '{"resources":{"bindings":[]}}'; fi
-elif [ "$1 $2" = "whoami --json" ]; then
-  echo "$*" > "$OUT/whoami-args"
-  if [ -z "$WHOAMI" ]; then echo; echo '{"loggedIn":false}'; exit 1; fi
-  echo; echo "$WHOAMI"
-elif [ "$1 $2" = "secret list" ]; then
-  echo "$*" > "$OUT/list-args"
-  case "$LISTING" in
-    "no worker") echo "✘ [ERROR] A request to the Cloudflare API failed." >&2; echo 'Worker "ember" not found. [code: 10007]' >&2; exit 1 ;;
-    error) echo "✘ [ERROR] Authentication error [code: 10000]" >&2; exit 1 ;;
-    *) echo "$LISTING" ;;
-  esac
-elif [ "$1 $2" = "deploy --secrets-file" ]; then
-  echo "$3" > "$OUT/secrets-path"
-  { stat -c %a "$3" 2>/dev/null || stat -f %Lp "$3"; } > "$OUT/secrets-mode"
-  cp "$3" "$OUT/secrets.json"
-  shift 3
-  echo "$*" > "$OUT/deploy-args"
-  previous=""
-  for arg in "$@"; do
-    [ "$previous" = "--config" ] && cp "$arg" "$OUT/deploy-config.json"
-    previous="$arg"
-  done
-  echo "Deployed ember"
-  if [ -n "$WRANGLER_OUTPUT_FILE_PATH" ] && [ -z "$NO_URL" ]; then
-    echo '{"version":1,"type":"deploy","targets":'"$TARGETS"'}' >> "$WRANGLER_OUTPUT_FILE_PATH"
-  fi
-  exit "\${DEPLOY_STATUS:-0}"
-else
-  echo "unexpected: $*" >&2; exit 2
-fi
+const WRANGLER = String.raw`
+import {appendFileSync, copyFileSync, statSync, writeFileSync} from "node:fs";
+import path from "node:path";
+const args = process.argv.slice(2);
+const [command, subcommand, third] = args;
+const env = process.env;
+const out = name => path.join(env.OUT, name);
+const line = args.join(" ") + "\n";
+const save = (name, value) => writeFileSync(out(name), String(value) + "\n");
+const log = value => console.log(typeof value === "string" ? value : JSON.stringify(value));
+const fail = (message, status = 1) => { console.error(message); process.exit(status); };
+appendFileSync(out("calls"), line);
+if (command === "d1") {
+  appendFileSync(out("d1-calls"), line);
+  if (subcommand === "list") log(env.D1_DATABASES || "[]");
+  else if (subcommand === "create") log("Created " + third);
+  else if (subcommand === "execute") {
+    const results = line.includes("sqlite_master")
+      ? (!env.D1_STATE || env.D1_STATE === "fresh" ? [] : [{name:"accounts"}])
+      : [{set_up:Number(env.D1_STATE === "set up")}];
+    log([{results}]);
+  } else if (subcommand === "migrations") {
+    appendFileSync(out("d1-calls"), "CI=" + (env.CI || "") + "\n");
+    process.exit(Number(env.MIGRATIONS_STATUS || 0));
+  } else fail("unexpected: " + line, 2);
+} else if (command === "deployments" && subcommand === "status") {
+  if (env.DEPLOYMENTS_STATUS) fail("✘ [ERROR] A request to the Cloudflare API failed.");
+  log({versions:[{version_id:"0a1b2c3d",percentage:100}]});
+} else if (command === "versions" && subcommand === "view") {
+  log({resources:{bindings:env.BOUND_D1 ? [{type:"d1",name:"DB",id:env.BOUND_D1}] : []}});
+} else if (command === "whoami" && subcommand === "--json") {
+  save("whoami-args", args.join(" "));
+  log("");
+  if (!env.WHOAMI) {
+    log({loggedIn:false});
+    process.exit(1);
+  }
+  log(env.WHOAMI);
+} else if (command === "secret" && subcommand === "list") {
+  save("list-args", args.join(" "));
+  if (env.LISTING === "no worker") fail("✘ [ERROR] A request to the Cloudflare API failed.\nWorker \"ember\" not found. [code: 10007]");
+  if (env.LISTING === "error") fail("✘ [ERROR] Authentication error [code: 10000]");
+  log(env.LISTING);
+} else if (command === "deploy" && subcommand === "--secrets-file") {
+  save("secrets-path", third);
+  save("secrets-mode", (statSync(third).mode & 0o777).toString(8));
+  copyFileSync(third, out("secrets.json"));
+  const options = args.slice(3);
+  save("deploy-args", options.join(" "));
+  const config = options.indexOf("--config");
+  if (config >= 0) copyFileSync(options[config + 1], out("deploy-config.json"));
+  log("Deployed ember");
+  if (env.WRANGLER_OUTPUT_FILE_PATH && !env.NO_URL)
+    appendFileSync(env.WRANGLER_OUTPUT_FILE_PATH, JSON.stringify({version:1, type:"deploy", targets:JSON.parse(env.TARGETS)}) + "\n");
+  process.exit(Number(env.DEPLOY_STATUS || 0));
+} else fail("unexpected: " + line, 2);
 `;
 
 let dir: string;
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "deploy-"));
-  writeFileSync(path.join(dir, "pnpm"), PNPM, { mode: 0o755 });
+  writeFileSync(path.join(dir, "wrangler.mjs"), WRANGLER);
 });
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -132,8 +137,8 @@ function deploy(
   } = process.env;
   // The script reads git's origin, which for this repository's own script would be the origin of whichever clone runs the suite, so git there finds no repository.
   const git = script === SCRIPT ? { GIT_DIR: path.join(dir, "no-repository") } : {};
-  const run = spawnSync(process.execPath, [...(terminal ? AT_TERMINAL : []), script, ...args], {
-    env: { ...shell, ...git, PATH: `${dir}:${process.env.PATH}`, LISTING, OUT: dir, DEPLOY_STATUS: String(deployStatus), TARGETS: JSON.stringify([WORKER_URL]), ...env },
+  const run = spawnSync(process.execPath, [...mockChildCommand("pnpm", path.join(dir, "wrangler.mjs"), "/bin/wrangler.js"), ...(terminal ? AT_TERMINAL : []), script, ...args], {
+    env: { ...shell, ...git, NODE_PATH: fileURLToPath(new URL("../node_modules", import.meta.url)), LISTING, OUT: dir, DEPLOY_STATUS: String(deployStatus), TARGETS: JSON.stringify([WORKER_URL]), ...env },
     encoding: "utf8",
   });
   const secrets = output("secrets.json");
@@ -155,7 +160,7 @@ describe("Deploy secrets", () => {
       VAPID_PRIVATE_KEY: expect.stringMatching(/^[\w-]{43}$/),
       EMBER_SETUP_TOKEN: expect.stringMatching(SECRET),
     });
-    expect(output("secrets-mode")).toBe("600");
+    if (process.platform !== "win32") expect(output("secrets-mode")).toBe("600");
     // Cloudflare's build logs mask nothing, so no secret may appear in them, not even masked; the
     // setup token is the one meant to be read, and goes in its link.
     for (const secret of [secrets!.SESSION_SECRET!, secrets!.VAPID_PRIVATE_KEY!]) expect(logs).not.toContain(secret);
