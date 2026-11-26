@@ -206,15 +206,19 @@ def mention_stream(rooms, after):
     return stream
 
 
-def mention_events(rooms, after, still_bound):
+def mention_events(rooms, after, still_bound, on_signal=None):
     with mention_stream(rooms, after) as stream:
         fields = {}
         for raw in stream:
             if raw.startswith(b":") and not still_bound():
                 return
             line = raw.decode("utf-8").rstrip("\r\n")
+            if on_signal and line in (": ready", ": heartbeat"):
+                on_signal()
             if not line:
                 if fields.get("event") == "mention":
+                    if on_signal:
+                        on_signal()
                     yield int(fields["id"]), json.loads(fields["data"])
                 fields.clear()
             elif ":" in line and not line.startswith(":"):

@@ -1,0 +1,12 @@
+请帮我接入团队 Ember。通用 r33 ZIP 从 https://192.168.16.70:5443/onboarding 下载。我会用 Codex 打开解压目录，请先确认当前操作系统和目录，自动选择启动入口。Windows 用 CMD 运行 ember-setup.cmd，macOS 和 Linux 运行 sh ember-setup.sh。入口会运行预检。后续 Python 命令按本机可用入口执行，Windows 可用 py -3，macOS 和 Linux 用 python3。如果发现我在旧接入目录，先保留原授权、项目选择、游标和待发批次，再更新脚本。
+
+1. 核对团队。运行 python pulse-onboard.py preflight。输出必须确认团队工作区。使用本人账号在团队 HTTPS 页面登录并运行 python ember-connect.py connect --project-channels 完成授权。若已有授权，运行 python pulse-onboard.py preflight --member "本人在 Ember 的显示名" 核对身份和权限。遇到证书、工作区或账号不匹配，在上报前停下并回报。
+2. 确认项目。只读列出本机候选仓库、中文名和可用的主会话数，等我明确选择后按 project-selection.md 保存项目范围。已接入的设备保留原授权、项目选择、频道绑定和 .pulse-pending。运行 python pulse-onboard.py bind-channels，按完整仓库名复用现有频道，只有服务端确认没有匹配才创建私有频道。遇到冲突或权限不足就报告。
+3. 试报。按包内 PROMPT.txt 先写可用情况、最近交付、当前卡点和下一步，保留已有未过时记录，证据放后面。把摘要给本人确认，再运行 prepare-ember，在工作目录为每个已选项目写入摘要或明确标记无新进展后运行 cycle --work-dir "<work_dir>"。只验收 Ember 时加 --ember-only。检查回执是否已在 Ember 总览读回。将 verify_url 发给另一位有该频道权限的成员，请对方核对总览并确认。再次运行 preflight，确认该项目显示 peer_confirmed。Pulse 的会话和 Token 单独同步及核验，Pulse 不可用时继续更新 Ember。
+4. 长期运行。前面核验通过后，用 python pulse-onboard.py start-listener 启动本机代答，仅监听本人当前绑定的项目。升级到 r33 时，在原接入目录保留授权、项目绑定和待发批次，先停止该目录的旧监听，再启动 r33 监听。请另一位成员在已绑定频道用 @ 验证实际回复。保留原来的 30 分钟频率和固定 Codex 会话，让同一个任务按包内 PROMPT.txt 整理摘要，再调用 pulse-onboard.py cycle。保留历史会话、包目录和待发批次。每轮上报会检查监听进程，退出时会自动恢复。至少核对一次实际自动触发的 last-cycle.json，里面的 ember_projects 应逐项覆盖所有已选 Ember 项目，并记录监听结果。
+
+回报工作区和账号、各项目频道、试报读回和同事确认、实际 @ 结果、定时任务绑定会话，以及采用 Pulse 时的单独回执。预检尚待登录或等待同事确认时如实标注。不要在对话中提交凭据。
+
+中途失败时，把原命令、失败字段和错误交给 Codex 诊断。先修可安全处理的问题，再重试原命令。文件缺失或校验失败，从同一团队接入页重新解压通用 ZIP，保留当前目录的私有授权与续传状态。账号或工作区不匹配，回到本人浏览器授权并重跑预检。网络超时或暂时不可用，沿用原 work_dir、回执和游标重试；持续失败就报告具体阻塞。Pulse 失败时继续做 Ember。不要关闭 TLS 校验、重置游标、删除待发批次或另建重复频道。
+
+预检和定时命令退出 0 表示本轮已完成，退出 2 表示等待授权、待核验或部分失败，退出 1 表示命令无法继续。接入预检退出 2 时按 next 和 incomplete 继续。定时回执在 .pulse-pending/last-cycle.json。如有 missing_draft，核对漏掉的项目后用 prepare-ember 建一个新工作目录。已经发布的项目填 no_change，仍在待发队列里的项目沿用原批次重试。损坏批次留在原工作目录，文件名包含 invalid，请核对再修复。

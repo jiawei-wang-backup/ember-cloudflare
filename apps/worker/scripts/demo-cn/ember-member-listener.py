@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 PACKAGE = Path(__file__).resolve().parent
 PENDING = PACKAGE / ".pulse-pending"
@@ -391,11 +391,25 @@ def legacy_mentions(queue, rooms, since):
             queue.put(room, msg["id"], msg)
 
 
-def receive_mentions(queue):
+def receive_mentions(queue, instance):
     since = datetime.now(timezone.utc)
     cursor = 0
     subscribed = ()
     retry = 1
+    signal_path = PENDING / "ember-listener-health.json"
+    last_saved = 0.0
+
+    def record_signal():
+        nonlocal last_saved
+        now = time.time()
+        if now - last_saved < 9:
+            return
+        try:
+            ONBOARD.write_state(signal_path, {"instance": instance, "server_signal_at": now})
+            last_saved = now
+        except OSError as exc:
+            print(f"无法写入监听健康记录：{type(exc).__name__}", flush=True)
+
     while True:
         try:
             rooms = tuple(bound_projects())
@@ -406,7 +420,9 @@ def receive_mentions(queue):
                 time.sleep(3)
                 continue
             try:
-                for event_id, event in CONNECTOR.mention_events(rooms, cursor, lambda: tuple(bound_projects()) == rooms):
+                for event_id, event in CONNECTOR.mention_events(
+                    rooms, cursor, lambda: tuple(bound_projects()) == rooms, on_signal=record_signal
+                ):
                     if event["roomId"] in rooms:
                         queue.put(event["roomId"], event["messageId"])
                     cursor = max(cursor, event_id)
@@ -420,6 +436,7 @@ def receive_mentions(queue):
             # A previous Ember version can be used while the server update is rolling out.
             for _ in range(20):
                 legacy_mentions(queue, rooms, since)
+                record_signal()
                 time.sleep(3)
                 rooms = tuple(bound_projects())
         except (OSError, ValueError, KeyError, StopIteration, URLError, HTTPException) as exc:
@@ -444,9 +461,9 @@ def cached_context(project, cache):
     return data
 
 
-def run():
+def run(instance):
     queue = MentionQueue()
-    Thread(target=receive_mentions, args=(queue,), daemon=True).start()
+    Thread(target=receive_mentions, args=(queue, instance), daemon=True).start()
     Thread(target=queue.notify_queued, daemon=True).start()
     cache = {}
     while True:
@@ -516,8 +533,14 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise SystemExit(3)
+        pid = os.getpid()
+        instance = uuid4().hex
+        ONBOARD.write_state(PENDING / "ember-listener-process.json", {
+            "pid": pid, "instance": instance, "process_stamp": ONBOARD.listener_process_stamp(pid),
+            "started_at": time.time(),
+        })
         print("本机 Codex 已开始监听获准的 Ember 频道。", flush=True)
-        run()
+        run(instance)
 
 
 if __name__ == "__main__":

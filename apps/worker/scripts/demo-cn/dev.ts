@@ -56,7 +56,7 @@ const headersOf = (req: http.IncomingMessage) => {
 };
 mkdirSync(state, { recursive: true });
 const reporting = lan && openReporting(state);
-const clientRelease = "r29";
+const clientRelease = "r33";
 const onboardingIdFile = path.join(state, "onboarding-id");
 if (tlsProxyKey && !existsSync(onboardingIdFile)) {
   try {writeFileSync(onboardingIdFile, randomUUID().replaceAll("-", ""), {flag:"wx", mode:0o600});}

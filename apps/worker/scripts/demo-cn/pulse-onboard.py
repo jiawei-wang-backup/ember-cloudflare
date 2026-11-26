@@ -7,12 +7,15 @@ import hashlib
 import os
 import json
 import importlib.util
+import math
 import re
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import time
 import sys
+from http.client import HTTPException
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, build_opener, urlopen
@@ -23,6 +26,7 @@ EMBER = "https://192.168.16.70:5443"
 PACKAGE = Path(__file__).resolve().parent
 PENDING = PACKAGE / ".pulse-pending"
 PAIRED_SCOPE = "uploaded-sessions"
+LISTENER_TIMEOUT = 120
 
 
 def approved_sources():
@@ -360,16 +364,22 @@ def stage_progress(work):
         raise ValueError("ember-projects.json 必须是数组")
     observed = datetime.fromtimestamp(source.stat().st_mtime, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     updates = {}
+    no_change = []
+    seen = set()
     for entry in entries:
         raw_repo = entry.get("repository") if isinstance(entry, dict) else None
         repo = raw_repo.lower() if isinstance(raw_repo, str) else ""
-        if repo not in approved or repo in updates:
+        if repo not in approved or repo in seen:
             raise ValueError("Ember 快照必须对应唯一且已确认发布的项目仓库")
+        seen.add(repo)
         facts = {key: value for key, value in entry.items() if key != "repository"}
+        if set(facts) == {"no_change"} and facts["no_change"] is True:
+            no_change.append(repo)
+            continue
         if not facts or not facts.keys() <= {"goal", "status", "progress", "milestones", "pulls"}:
             raise ValueError("Ember 快照只接受项目摘要、目标、状态、里程碑和 PR")
         updates[repo] = {"revision": uuid.uuid4().hex, "observedAt": observed, "facts": facts}
-    write_state(queue, {"updates": updates, "receipts": {}})
+    write_state(queue, {"updates": updates, "receipts": {}, "no_change": no_change})
 
 
 def queue_contents(path):
@@ -379,6 +389,9 @@ def queue_contents(path):
     readbacks = state.setdefault("readbacks", {})
     if not isinstance(readbacks, dict):
         raise ValueError("读回记录结构无效")
+    no_change = state.get("no_change", [])
+    if not isinstance(no_change, list) or any(not isinstance(repo, str) or repo in state["updates"] for repo in no_change):
+        raise ValueError("无进展记录结构无效")
     for repo, update in state["updates"].items():
         if (not isinstance(update, dict) or not re.fullmatch(r"[a-f0-9]{32}", str(update.get("revision", ""))) or
                 not isinstance(update.get("observedAt"), str) or not isinstance(update.get("facts"), dict)):
@@ -499,7 +512,109 @@ def submit_pulse(work, sources):
         return result
 
 
-def start_listener():
+def listener_running():
+    try:
+        with file_lock(PENDING / "ember-member-uploaded-sessions.lock"):
+            return False
+    except LockBusy:
+        return True
+
+
+@contextmanager
+def windows_listener_process(pid, *, terminate=False):
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    kernel.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    handle = kernel.OpenProcess(0x1000 | (0x0001 if terminate else 0), False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # No such process.
+            yield None, None
+            return
+        raise ctypes.WinError(error)
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        created = times[0]
+        yield str((created.dwHighDateTime << 32) | created.dwLowDateTime), (
+            lambda: kernel.TerminateProcess(handle, 1)
+        )
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def listener_process_stamp(pid):
+    if sys.platform == "win32":
+        with windows_listener_process(pid) as (stamp, _):
+            return stamp
+    result = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "command="],
+                            capture_output=True, timeout=5, env={**os.environ, "LC_ALL": "C"})
+    return hashlib.sha256(result.stdout.strip()).hexdigest() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def listener_state(name):
+    try:
+        value = json.loads((PENDING / name).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def listener_signal_age(instance, *, startup_grace=True):
+    heartbeat = listener_state("ember-listener-health.json")
+    stamp = heartbeat.get("server_signal_at") if heartbeat.get("instance") == instance.get("instance") else None
+    if not isinstance(stamp, (int, float)) or not math.isfinite(stamp) or stamp > time.time() + 5:
+        stamp = instance.get("started_at") if startup_grace else None
+    return max(0, time.time() - stamp) if isinstance(stamp, (int, float)) and math.isfinite(stamp) else None
+
+
+def stop_stalled_listener(instance):
+    if not listener_running():
+        return True
+    if listener_state("ember-listener-process.json") != instance:
+        raise ValueError("监听进程已变更，保留现有进程")
+    age = listener_signal_age(instance)
+    if age is None or age <= LISTENER_TIMEOUT:
+        return False
+    pid, expected = instance.get("pid"), instance.get("process_stamp")
+    if type(pid) is not int or pid <= 0 or pid == os.getpid() or not expected:
+        raise ValueError("无法确认监听进程身份，保留现有进程")
+    if sys.platform == "win32":
+        with windows_listener_process(pid, terminate=True) as (stamp, terminate):
+            if stamp != expected:
+                raise ValueError("监听进程身份不匹配，保留现有进程")
+            if not terminate():
+                raise OSError("无法停止卡住的 Ember 监听进程")
+    else:
+        try:
+            pidfd = os.pidfd_open(pid) if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal") else None
+            try:
+                if listener_process_stamp(pid) != expected:
+                    raise ValueError("监听进程身份不匹配，保留现有进程")
+                if pidfd is None:
+                    os.kill(pid, signal.SIGKILL)
+                else:
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            finally:
+                if pidfd is not None:
+                    os.close(pidfd)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 8
+    while listener_running():
+        if time.monotonic() >= deadline:
+            raise OSError("旧监听未释放锁，本轮不会再启动进程")
+        time.sleep(0.2)
+    return True
+
+
+def start_listener(expected_member=None, *, verify_binding=False, stalled=None):
     approved_sources()
     selection = json.loads((PACKAGE / ".pulse-project-selection.json").read_text(encoding="utf-8-sig"))
     if selection.get("ember_paired") != PAIRED_SCOPE:
@@ -517,31 +632,74 @@ def start_listener():
     if status.returncode:
         raise ValueError("本机 Codex CLI 尚未登录，请登录后重试")
     connector = load_connector()
-    connector.check_workspace()
+    workspace = connector.check_workspace()
+    if expected_member or verify_binding:
+        identity = connector.call_tool("get_onboarding_identity", {})
+        if identity.get("workspace_id") != workspace["workspace_id"] or (
+            expected_member and expected_member not in (identity["member"]["id"], identity["member"]["name"])
+        ):
+            raise ValueError("监听授权账号或工作区与定时任务不符，请用本人账号重新授权")
+    if verify_binding:
+        for project in projects:
+            repository = project.get("repository")
+            if not repository:
+                raise ValueError("自动恢复监听需要已确认的仓库与频道绑定")
+            bound = connector.call_tool("find_project_channel", {"repository": repository})
+            if bound.get("status") != "matched" or bound["room"]["id"] != project["ember_room_id"]:
+                raise ValueError(f"监听频道绑定待核实：{repository}")
     response = connector.mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, "2025-06-18")
     tools = {tool["name"] for tool in (response or {}).get("result", {}).get("tools", [])}
     if not {"read_room", "send_message"} <= tools:
         raise ValueError("Ember 网页授权缺少读取频道或发送消息权限")
     for room in sorted(rooms):
         connector.call_tool("read_room", {"room_id": room})
-    with connector.mention_stream(sorted(rooms), 0):
-        pass
+    with connector.mention_stream(sorted(rooms), 0) as stream:
+        if stalled and stream.readline(1024).strip() != b": ready":
+            raise OSError("Ember 推送未就绪，保留原监听并等待下一轮")
+    if stalled is not None and not stop_stalled_listener(stalled):
+        return "已有监听进程"
+    if listener_running():
+        return "已有监听进程"
     PENDING.mkdir(mode=0o700, exist_ok=True)
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if sys.platform == "win32" else {"start_new_session": True}
     with (PENDING / "ember-member-listener.log").open("ab") as log:
         process = subprocess.Popen([sys.executable, str(PACKAGE / "ember-member-listener.py")], stdin=subprocess.DEVNULL,
                                    stdout=log, stderr=log, cwd=PACKAGE, **options)
-    time.sleep(1)
-    exit_code = process.poll()
-    if exit_code not in (None, 3):
-        raise OSError("本机 Codex 监听启动失败，请查看 .pulse-pending/ember-member-listener.log")
-    return "已有监听进程" if exit_code == 3 else "监听已启动"
+    deadline = time.monotonic() + (15 if stalled is not None else 5)
+    while time.monotonic() < deadline:
+        exit_code = process.poll()
+        instance = listener_state("ember-listener-process.json")
+        if exit_code is None and instance.get("pid") == process.pid and listener_running():
+            if stalled is None:
+                return "监听已启动"
+            age = listener_signal_age(instance, startup_grace=False)
+            if age is not None and age <= LISTENER_TIMEOUT:
+                return "监听已重启"
+        if exit_code == 3 and listener_running():
+            return "已有监听进程"
+        if exit_code is not None:
+            break
+        time.sleep(0.2)
+    raise OSError("尚未确认监听进程启动或重启后的心跳，请查看 .pulse-pending/ember-member-listener.log")
 
 
-def check_listener(result):
+def check_listener(result, expected_member=None, *, verify_binding=False):
     try:
-        result["ember_member_listener"] = start_listener()
-    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
+        with file_lock(PENDING / "ember-member-listener-start.lock"):
+            if not listener_running():
+                result["ember_member_listener"] = start_listener(expected_member, verify_binding=verify_binding)
+                return
+            instance = listener_state("ember-listener-process.json")
+            age = listener_signal_age(instance)
+            if age is not None:
+                result["ember_member_listener_signal_age_seconds"] = int(age)
+            if age is not None and age <= LISTENER_TIMEOUT:
+                result["ember_member_listener"] = "已有监听进程"
+                return
+            if not instance.get("instance"):
+                raise ValueError("旧监听缺少可验证的进程记录，请停止旧版后启动新版监听")
+            result["ember_member_listener"] = start_listener(expected_member, verify_binding=True, stalled=instance)
+    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError, HTTPException) as exc:
         result["ember_member_listener"] = "未就绪"
         result["ember_member_listener_error"] = str(exc)
 
@@ -557,6 +715,45 @@ def retry_ember(result):
             (PENDING / "ember-context-revision").touch()
     except (ValueError, OSError, KeyError, RuntimeError, StopIteration) as exc:
         result["ember_error"] = str(exc)
+
+
+def ember_cycle_projects(result, work, repositories):
+    queue = {}
+    unreadable = False
+    if work and any((work / name).is_file() for name in ("ember-projects.json", "ember-queued.json")):
+        try:
+            queue = queue_contents(work / "ember-queued.json")
+        except (ValueError, OSError):
+            unreadable = True
+    updates = queue.get("updates", {})
+    waiting = {
+        item["project"]: item for item in result.get("ember_posts", [])
+        if "project" in item and (item.get("error") or item.get("readback_status") == "pending")
+    }
+    rows = []
+    for repo in sorted(repositories):
+        row = {"project": repo}
+        if repo in updates:
+            receipt = queue["receipts"].get(repo, {})
+            readback = queue["readbacks"].get(repo, {})
+            status = "pending_retry"
+            if receipt.get("status") == "superseded" or readback.get("readback_status") == "superseded":
+                status = "superseded"
+            elif readback.get("readback_status") == "verified":
+                status = "updated" if receipt["status"] == "published" else "no_change"
+            row.update(revision=updates[repo]["revision"], **readback)
+        elif repo in queue.get("no_change", []):
+            status = "no_change"
+        else:
+            status = "pending_retry" if unreadable else "missing_draft"
+        if repo in waiting:
+            item = waiting[repo]
+            if status != "missing_draft":
+                status = "pending_retry"
+            row["retry_error"] = item.get("readback_error") or item.get("error")
+        row["status"] = status
+        rows.append(row)
+    return rows
 
 
 def cycle(result, work, sources, args):
@@ -575,6 +772,8 @@ def cycle(result, work, sources, args):
         except OSError as exc:
             result["ember_stage_error"] = str(exc)
         retry_ember(result)
+        result["ember_projects"] = ember_cycle_projects(result, work, ember_projects())
+        check_listener(result, args.member, verify_binding=True)
         if args.ember_only:
             return
         try:
@@ -600,7 +799,7 @@ def main():
     parser.add_argument("--exclude-session-id", type=lambda value: str(uuid.UUID(value)))
     parser.add_argument("--label")
     parser.add_argument("--github-login")
-    parser.add_argument("--member", help="用 preflight 核对预期的 Ember 显示名或账号 ID")
+    parser.add_argument("--member", help="预期的 Ember 显示名或账号 ID")
     args = parser.parse_args()
     if args.ember_only and args.action != "cycle":
         parser.error("--ember-only requires cycle")
@@ -631,7 +830,7 @@ def main():
         elif args.action == "verify-projects":
             result["projects"] = verify_projects()
         elif args.action == "start-listener":
-            check_listener(result)
+            check_listener(result, args.member)
         elif args.action == "bind-pulse-device":
             bind_reporting_member(result)
         elif args.action != "links":
@@ -692,7 +891,9 @@ def main():
             incomplete.append("ember_stage")
         if "ember_binding_error" in result or any("error" in item for item in result.get("channels", [])):
             incomplete.append("channels")
-        if "ember_member_listener_error" in result or (listener and listener not in ("已有监听进程", "监听已启动")):
+        if "ember_member_listener_error" in result or (listener and listener not in (
+            "已有监听进程", "监听已启动", "监听已重启",
+        )):
             incomplete.append("ember_member_listener")
         if binding and binding.get("status") != "bound":
             incomplete.append("ember_reporting_member")
@@ -700,6 +901,8 @@ def main():
             incomplete.append("ember_posts")
         if any(item.get("readback_status") == "pending" for item in result.get("ember_posts", [])):
             incomplete.append("ember_readback")
+        if any(item["status"] in ("missing_draft", "pending_retry") for item in result.get("ember_projects", [])):
+            incomplete.append("ember_projects")
         if incomplete:
             result["incomplete"] = incomplete
     if args.action == "preflight" and "error" not in result:

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -186,15 +187,77 @@ class OnboardingTest(unittest.TestCase):
             patch.object(onboard, "load_connector", return_value=connector),
             patch.object(onboard, "bind_project_channels", return_value=[{"project":"example/project", "room_id":"existing"}]),
             patch.object(onboard, "collector") as collector,
+            patch.object(onboard, "check_listener"),
         ):
             status, result = self.run_command("cycle", "--ember-only")
             self.assertEqual(status, 2)
             self.assertEqual({entry["status"] for entry in result["ember_posts"]}, {"quarantined", "published"})
             self.assertEqual((next(bad.glob("ember-queued.invalid-*.json"))).read_text(), "{")
             self.assertTrue((self.pending / "last-cycle.json").is_file())
-            self.assertEqual(self.run_command("cycle", "--ember-only")[0], 0)
+            status, receipt = self.run_command("cycle", "--ember-only")
+            self.assertEqual(status, 2)
+            self.assertEqual(receipt["ember_projects"], [{"project": "example/project", "status": "missing_draft"}])
+            self.assertEqual(self.run_command("cycle", "--ember-only", "--work-dir", str(good))[0], 0)
             self.assertEqual(connector.call_tool.call_count, 2)
             collector.assert_not_called()
+
+    def test_cycle_reports_each_project_even_when_only_one_has_a_draft(self):
+        selection = json.loads(self.selection.read_text())
+        selection["projects"].append({"repository": "example/other", "source_ids": [SOURCE]})
+        self.selection.write_text(json.dumps(selection), encoding="utf-8")
+        channels = [{"project": repo, "room_id": repo.split("/")[1]} for repo in ("example/project", "example/other")]
+        revisions = {}
+        blocked_rooms = {"other"}
+
+        def respond(name, payload):
+            room = payload["room_id"]
+            if name == "sync_project_snapshot":
+                if room in blocked_rooms:
+                    raise ValueError("project temporarily unavailable")
+                revisions[room] = json.loads(payload["update_json"])["revision"]
+                return {"revision": revisions[room], "status": "published"}
+            return {"snapshot": {"revision": revisions[room], "peer_confirmed": False}}
+
+        connector = Mock()
+        connector.call_tool.side_effect = respond
+        with (
+            patch.object(onboard, "verify_package"),
+            patch.object(onboard, "load_connector", return_value=connector),
+            patch.object(onboard, "bind_project_channels", return_value=channels),
+            patch.object(onboard, "check_listener"),
+        ):
+            _, prepared = self.run_command("prepare-ember")
+            work = Path(prepared["work_dir"])
+            (work / "ember-projects.json").write_text('[{"repository":"example/project","goal":"fixture"}]')
+            status, result = self.run_command("cycle", "--ember-only", "--work-dir", str(work))
+            self.assertEqual(status, 2)
+            self.assertEqual(result["incomplete"], ["ember_projects"])
+            self.assertEqual({row["project"]: row["status"] for row in result["ember_projects"]},
+                             {"example/project": "updated", "example/other": "missing_draft"})
+            self.assertEqual(json.loads((self.pending / "last-cycle.json").read_text())["ember_projects"],
+                             result["ember_projects"])
+            self.assertEqual(set(revisions), {"project"})
+            _, prepared = self.run_command("prepare-ember")
+            work = Path(prepared["work_dir"])
+            (work / "ember-projects.json").write_text(
+                '[{"repository":"example/project","no_change":true},{"repository":"example/other","no_change":true}]')
+            status, result = self.run_command("cycle", "--ember-only", "--work-dir", str(work))
+            self.assertEqual(status, 0)
+            self.assertEqual([row["status"] for row in result["ember_projects"]], ["no_change", "no_change"])
+            self.assertEqual(connector.call_tool.call_count, 2)
+            _, prepared = self.run_command("prepare-ember")
+            work = Path(prepared["work_dir"])
+            (work / "ember-projects.json").write_text(
+                '[{"repository":"example/project","no_change":true},{"repository":"example/other","goal":"fixture"}]')
+            status, result = self.run_command("cycle", "--ember-only", "--work-dir", str(work))
+            self.assertEqual(status, 2)
+            self.assertEqual(result["ember_projects"][0]["status"], "pending_retry")
+            revision = result["ember_projects"][0]["revision"]
+            blocked_rooms.clear()
+            status, result = self.run_command("cycle", "--ember-only", "--work-dir", str(work))
+            self.assertEqual(status, 0)
+            self.assertEqual(result["ember_projects"][0]["status"], "updated")
+            self.assertEqual(revisions["other"], revision)
 
     def test_cycle_overlap_returns_partial_without_touching_queue(self):
         with onboard.file_lock(self.pending / "report-cycle.lock"), patch.object(onboard, "verify_package"):
@@ -236,6 +299,7 @@ class OnboardingTest(unittest.TestCase):
             patch.object(onboard, "bind_project_channels", side_effect=ValueError("Ember authorization expired")),
             patch.object(onboard, "collector", side_effect=collect) as collector,
             patch.object(onboard, "bind_reporting_member"),
+            patch.object(onboard, "check_listener"),
         ):
             status, result = self.run_command("cycle")
         self.assertEqual(status, 2)
@@ -244,6 +308,100 @@ class OnboardingTest(unittest.TestCase):
         self.assertNotIn("evidence", result["prepared"])
         self.assertTrue((draft / "ember-queued.json").is_file())
         self.assertEqual([call.args[0] for call in collector.call_args_list], ["Prepare", "Submit"])
+
+
+    def test_cycle_always_checks_and_recovers_listener(self):
+        with (
+            patch.object(onboard, "verify_package"),
+            patch.object(onboard, "retry_ember"),
+            patch.object(onboard, "start_listener", return_value="监听已启动") as start,
+        ):
+            with onboard.file_lock(self.pending / "ember-member-uploaded-sessions.lock"):
+                onboard.write_state(self.pending / "ember-listener-health.json", {"server_signal_at": time.time()})
+                status, result = self.run_command("cycle", "--ember-only")
+            self.assertEqual(status, 2)
+            self.assertEqual(result["ember_member_listener"], "已有监听进程")
+            start.assert_not_called()
+            status, result = self.run_command("cycle", "--ember-only")
+            self.assertEqual(status, 2)
+            self.assertEqual(result["ember_member_listener"], "监听已启动")
+            start.assert_called_once_with(None, verify_binding=True)
+
+    def test_cycle_rechecks_stale_listener_before_restarting(self):
+        self.pending.mkdir()
+        instance = {"pid": 123, "process_stamp": "fixture", "instance": "listener", "started_at": time.time() - 300}
+        onboard.write_state(self.pending / "ember-listener-process.json", instance)
+        heartbeat = self.pending / "ember-listener-health.json"
+        onboard.write_state(heartbeat, {"instance": "other", "server_signal_at": time.time()})
+        with (
+            onboard.file_lock(self.pending / "ember-member-uploaded-sessions.lock"),
+            patch.object(onboard, "verify_package"),
+            patch.object(onboard, "retry_ember"),
+            patch.object(onboard, "start_listener", return_value="监听已重启") as start,
+        ):
+            _, result = self.run_command("cycle", "--ember-only", "--member", "fixture")
+            start.assert_called_once_with("fixture", verify_binding=True, stalled=instance)
+            self.assertEqual(result["ember_member_listener"], "监听已重启")
+            self.assertNotIn("ember_member_listener", result["incomplete"])
+            onboard.write_state(heartbeat, {"instance": "listener", "server_signal_at": time.time()})
+            self.assertFalse(onboard.stop_stalled_listener(instance))
+
+    def test_stale_listener_is_kept_when_the_server_stream_is_unavailable(self):
+        selection = json.loads(self.selection.read_text())
+        selection["projects"][0]["ember_room_id"] = "expected-room"
+        self.selection.write_text(json.dumps(selection))
+        connector = Mock()
+        connector.check_workspace.return_value = {"workspace_id": "fixture"}
+        connector.call_tool.side_effect = [
+            {"workspace_id": "fixture", "member": {"id": "u", "name": "fixture"}},
+            {"status": "matched", "room": {"id": "expected-room"}}, {},
+        ]
+        connector.mcp.return_value = {"result": {"tools": [{"name": "read_room"}, {"name": "send_message"}]}}
+        connector.mention_stream.return_value = contextlib.nullcontext(io.BytesIO(b": offline\n"))
+        with (
+            patch.object(onboard, "load_connector", return_value=connector),
+            patch.object(onboard.shutil, "which", return_value="codex"),
+            patch.object(onboard.subprocess, "run", return_value=Mock(returncode=0)),
+            patch.object(onboard, "stop_stalled_listener") as stop,
+            patch.object(onboard.subprocess, "Popen") as spawn,
+        ):
+            with self.assertRaises(OSError):
+                onboard.start_listener("fixture", verify_binding=True, stalled={"instance": "stale"})
+            stop.assert_not_called()
+            spawn.assert_not_called()
+
+    def test_listener_error_does_not_skip_ember_upload(self):
+        with (
+            patch.object(onboard, "verify_package"),
+            patch.object(onboard, "retry_ember") as upload,
+            patch.object(onboard, "start_listener", side_effect=ValueError("wrong account")),
+        ):
+            status, result = self.run_command("cycle", "--ember-only")
+        upload.assert_called_once()
+        self.assertEqual(status, 2)
+        self.assertEqual(result["incomplete"], ["ember_member_listener", "ember_projects"])
+
+    def test_listener_resume_refuses_wrong_account_or_channel(self):
+        selection = json.loads(self.selection.read_text())
+        selection["projects"][0]["ember_room_id"] = "expected-room"
+        self.selection.write_text(json.dumps(selection))
+        connector = Mock()
+        connector.check_workspace.return_value = {"workspace_id": "fixture"}
+        for identity, channel in [
+            ({"workspace_id": "fixture", "member": {"id": "u", "name": "other"}}, None),
+            ({"workspace_id": "fixture", "member": {"id": "u", "name": "fixture"}},
+             {"status": "matched", "room": {"id": "different-room"}}),
+        ]:
+            connector.call_tool.side_effect = [identity, channel]
+            with (
+                patch.object(onboard, "load_connector", return_value=connector),
+                patch.object(onboard.shutil, "which", return_value="codex"),
+                patch.object(onboard.subprocess, "run", return_value=Mock(returncode=0)),
+                patch.object(onboard.subprocess, "Popen") as spawn,
+            ):
+                with self.assertRaises(ValueError):
+                    onboard.start_listener("fixture", verify_binding=True)
+            spawn.assert_not_called()
 
 
 if __name__ == "__main__":

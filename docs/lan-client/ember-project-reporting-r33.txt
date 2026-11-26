@@ -1,0 +1,35 @@
+在同一条固定 Codex 会话中，每 30 分钟同步已确认的 Ember 项目。使用当前接入目录里的脚本和私有 .pulse-project-selection.json。自动运行期间只处理已选仓库和已授权会话。复用现有频道、定时任务和待发批次，保留历史会话及采集游标。 macOS 或 Linux 如果只提供 python3，以下命令中的 python 都用 python3。
+
+由 Codex 先判断是否有新事实。逐个核对已选、启用 Ember 发布的仓库。只有确认有新事实才准备新快照。有现有快照且核对后没有新事实时，给这个仓库写 {"repository":"owner/repo","no_change":true}，这条记录只写入本机回执。资料查不到、首份快照未写入或还没检查的项目，不可标记为无新进展。事实依据来自已授权的项目会话、Git、GitHub 和交付回执。对照 Ember 当前总览，保留仍有效的内容，修正明确过时的条目。缺回执就标待核实。可用情况要写明环境和验证范围，合并、测试、POC、正式部署和业务验收各自独立记录。只上报频道成员可看的脱敏资料。工作区或本人账号有疑问时先运行 preflight 核对。
+
+执行 `python pulse-onboard.py prepare-ember`。在返回的 work_dir 内先写 UTF-8 的 ember-projects.json.tmp，写完后原子改名为 ember-projects.json。格式如下。示例仅用于说明字段，不要作为事实上传。
+
+[
+  {
+    "repository": "owner/repo",
+    "goal": "这个项目帮助谁解决什么问题",
+    "status": "unknown",
+    "progress": [
+      "可用情况：写清已验证可用的功能和环境；未知则写待确认。",
+      "最近交付：一句话说明最近交付和核实到的阶段。",
+      "当前卡点：写清最影响交付且还缺的证据或依赖。",
+      "下一步：写明由谁做什么。",
+      "试用入口：https://example.com/trial",
+      "详细记录与依据 https://example.com/evidence"
+    ],
+    "milestones": [{"title":"正式环境验收","state":"pending","evidence":"实际验收回执待补","due_on":null}],
+    "pulls": [{"number":"42","title":"已核实的变更","url":"https://github.com/owner/repo/pull/42","state":"merged","updated_at":"2026-11-24T07:30:00.000Z"}]
+  }
+]
+
+progress 的前四项用示例里的标签，每项一两句话。只有已核实、频道成员可以试用的入口才填「试用入口：」加一个 URL。PR、发布单、验收链接放后面；Ember 总览会折叠详细记录。repository 必填，其余字段可省略。省略的字段会保留，列表字段只在有足够资料时提交当前完整列表。progress 最多 8 项，每项及 goal 最多 600 字，milestones 最多 24 项，pulls 最多 30 项。项目状态用 on_track、blocked、completed、paused 或 unknown；里程碑用 pending 或 completed，PR 用 open、merged 或 closed。读到证据不足时，保留历史记录并明确待核实的内容。
+
+每轮都创建工作目录，写入本轮逐项目检查结果。只调用一次 `python pulse-onboard.py cycle --work-dir "<work_dir>"`。仅上报 Ember 时加 `--ember-only`。仅在能核实固定上报会话 UUID 时，传 `--exclude-session-id "<UUID>"`。即使全是无新进展，也传入本轮工作目录，以便记录覆盖范围并续传旧批次。
+
+核对 .pulse-pending/last-cycle.json 里的 ember_projects。updated 表示已更新并读回，no_change 表示已核对无变化，pending_retry 表示待重试，missing_draft 表示本轮缺草稿或检查记录，superseded 表示已有更新的版本。并核对 ember_posts 和 Ember 项目总览。首次试报把 verify_url 交给另一位有权限的成员核验，确认后用 preflight 检查 peer_confirmed。published 表示服务端已发布，verified 表示客户端读到了原版本，superseded 表示当前已有更新的版本。用量回执独立核对。
+
+退出 2 时按 incomplete 定位本轮未完成的环节。网络恢复后用原工作目录重复同一命令。发现漏报时先核对缺项，用 prepare-ember 建新工作目录补齐，已发布且无新进展的项目填 no_change。待发批次保留在原目录。已经收到写入回执的原版本只继续读回核验。授权失效时用本人账号重新授权后续传。隔离的损坏批次保留在原工作目录。已有上报运行时让原任务继续。保留原会话、游标、待发目录和项目范围。
+
+cycle 每轮都会检查本机 Codex 监听。进程正常就复用，退出后会核对授权和原频道绑定再恢复。已运行进程超过 120 秒没有收到 Ember 推送信号时，会先探测 Ember 推送并复查心跳。确认旧进程身份后停止它，等监听锁释放再启动一个，并读到新进程的心跳后才记为「监听已重启」。推送不可用时保留旧进程，下一轮重试。r32 或更早版本升级后请先结束旧版监听，再启动新版。授权或绑定异常时，照常处理上报，在 last-cycle.json 查看 ember_member_listener。可传 --member 核对自动恢复使用的 Ember 账号。
+
+排查监听时可查看 .pulse-pending/ember-listener-health.json。时间戳来自 Ember 的推送信号，与进程是否存在分别核对。该文件只保存在本机。
